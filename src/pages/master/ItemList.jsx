@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 
 function ItemList() {
     const [items, setItems] = useState([]);
+    const [units, setUnits] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editingItem, setEditingItem] = useState(null);
@@ -15,6 +16,7 @@ function ItemList() {
 
     useEffect(() => {
         fetchItems();
+        fetchUnits();
     }, []);
 
     const fetchItems = async () => {
@@ -29,6 +31,18 @@ function ItemList() {
             console.error('Error:', error);
         }
         setLoading(false);
+    };
+
+    const fetchUnits = async () => {
+        try {
+            const response = await fetch('/api/units');
+            const data = await response.json();
+            if (data.success) {
+                setUnits(data.data);
+            }
+        } catch (error) {
+            console.error('Error fetching units:', error);
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -130,12 +144,16 @@ function ItemList() {
                             </div>
                             <div className="form-group">
                                 <label>Satuan</label>
-                                <input
-                                    type="text"
+                                <select
                                     value={formData.unit}
                                     onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
-                                    placeholder="pcs, kg, box, dll"
-                                />
+                                    required
+                                >
+                                    <option value="">-- Pilih Satuan --</option>
+                                    {units.map(u => (
+                                        <option key={u.id} value={u.code}>{u.code} - {u.name}</option>
+                                    ))}
+                                </select>
                             </div>
                             <div className="form-row">
                                 <div className="form-group">
@@ -195,7 +213,7 @@ function ItemList() {
                                     <tr key={item.id}>
                                         <td><strong>{item.code}</strong></td>
                                         <td>{item.name}</td>
-                                        <td>{item.unit}</td>
+                                        <td><span className="badge badge-info">{item.unit}</span></td>
                                         <td style={{ textAlign: 'right' }}>{formatCurrency(item.standard_cost)}</td>
                                         <td style={{ textAlign: 'right' }}>{formatCurrency(item.standard_price)}</td>
                                         <td style={{ textAlign: 'center' }}>

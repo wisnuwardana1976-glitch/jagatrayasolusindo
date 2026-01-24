@@ -10,7 +10,12 @@ async function checkTableStructure() {
         const pool = await odbc.pool(connectionString);
         const conn = await pool.connect();
 
-        const tables = ['Items', 'Partners', 'PurchaseOrders', 'PurchaseOrderDetails', 'Receivings', 'ReceivingDetails', 'Shipments', 'ShipmentDetails', 'ARInvoices', 'APInvoices'];
+        // Get list of tables
+        // const tables = await conn.query("SELECT table_name FROM SYSTABLE WHERE creator = (SELECT user_id FROM SYSUSER WHERE user_name = 'dba') ORDER BY table_name");
+
+        const tables = [
+            'Items', 'Partners', 'PurchaseOrders', 'PurchaseOrderDetails', 'Receivings', 'ReceivingDetails', 'Shipments', 'ShipmentDetails', 'ARInvoices', 'APInvoices', 'Transcodes', 'Transactions'
+        ];
 
         for (const table of tables) {
             console.log(`\n========== ${table} ==========`);

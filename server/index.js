@@ -78,6 +78,204 @@ app.get('/api/tables', async (req, res) => {
   }
 });
 
+// ==================== UNITS (MASTER SATUAN) ====================
+app.get('/api/units', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Units ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/units/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Units WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/units', async (req, res) => {
+  try {
+    const { code, name, description } = req.body;
+    await executeQuery(
+      'INSERT INTO Units (code, name, description) VALUES (?, ?, ?)',
+      [code, name, description || '']
+    );
+    const result = await executeQuery('SELECT * FROM Units WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Satuan berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/units/:id', async (req, res) => {
+  try {
+    const { code, name, description } = req.body;
+    await executeQuery(
+      'UPDATE Units SET code = ?, name = ?, description = ? WHERE id = ?',
+      [code, name, description, req.params.id]
+    );
+    res.json({ success: true, message: 'Satuan berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/units/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Units WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Satuan berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== TRANSACTIONS (MASTER TRANSAKSI) ====================
+app.get('/api/transactions', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Transactions ORDER BY nomortranscode');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/transactions/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Transactions WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/transactions', async (req, res) => {
+  try {
+    const { nomortranscode, description } = req.body;
+    await executeQuery(
+      'INSERT INTO Transactions (nomortranscode, description) VALUES (?, ?)',
+      [nomortranscode, description]
+    );
+    const result = await executeQuery('SELECT * FROM Transactions WHERE nomortranscode = ?', [nomortranscode]);
+    res.json({ success: true, data: result[0], message: 'Transaksi berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/transactions/:id', async (req, res) => {
+  try {
+    const { nomortranscode, description } = req.body;
+    await executeQuery(
+      'UPDATE Transactions SET nomortranscode = ?, description = ? WHERE id = ?',
+      [nomortranscode, description, req.params.id]
+    );
+    res.json({ success: true, message: 'Transaksi berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/transactions/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Transactions WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Transaksi berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== TRANSCODES (MASTER KODE TRANSAKSI) ====================
+app.get('/api/transcodes', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Transcodes ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/transcodes/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Transcodes WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/transcodes', async (req, res) => {
+  try {
+    const { code, name, prefix, format, description, nomortranscode } = req.body;
+    await executeQuery(
+      'INSERT INTO Transcodes (code, name, prefix, format, description, nomortranscode) VALUES (?, ?, ?, ?, ?, ?)',
+      [code, name, prefix, format || '{PREFIX}/{MM}{YYYY}/{SEQ}', description || '', nomortranscode || null]
+    );
+    const result = await executeQuery('SELECT * FROM Transcodes WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Transcode berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/transcodes/:id', async (req, res) => {
+  try {
+    const { code, name, prefix, format, description, active, nomortranscode } = req.body;
+    await executeQuery(
+      'UPDATE Transcodes SET code = ?, name = ?, prefix = ?, format = ?, description = ?, active = ?, nomortranscode = ? WHERE id = ?',
+      [code, name, prefix, format, description, active || 'Y', nomortranscode || null, req.params.id]
+    );
+    res.json({ success: true, message: 'Transcode berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/transcodes/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Transcodes WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Transcode berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Generate document number based on transcode
+app.get('/api/transcodes/:code/generate', async (req, res) => {
+  try {
+    const transcode = await executeQuery('SELECT * FROM Transcodes WHERE code = ?', [req.params.code]);
+    if (!transcode[0]) {
+      return res.status(404).json({ success: false, error: 'Transcode tidak ditemukan' });
+    }
+
+    const tc = transcode[0];
+    const now = new Date();
+    const year = now.getFullYear().toString();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const seq = String(tc.last_number + 1).padStart(4, '0');
+
+    // Generate based on format
+    let docNumber = tc.format
+      .replace('{PREFIX}', tc.prefix)
+      .replace('{YYYY}', year)
+      .replace('{YY}', year.slice(-2))
+      .replace('{MM}', month)
+      .replace('{DD}', day)
+      .replace('{SEQ}', seq);
+
+    // Update last number
+    await executeQuery('UPDATE Transcodes SET last_number = last_number + 1 WHERE code = ?', [req.params.code]);
+
+    res.json({ success: true, doc_number: docNumber, transcode: tc });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== ITEMS (MASTER ITEM) ====================
 app.get('/api/items', async (req, res) => {
   try {

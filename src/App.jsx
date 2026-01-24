@@ -4,6 +4,9 @@ import Dashboard from './pages/Dashboard';
 import ItemList from './pages/master/ItemList';
 import PartnerList from './pages/master/PartnerList';
 import SalesPersonList from './pages/master/SalesPersonList';
+import UnitList from './pages/master/UnitList';
+import TranscodeList from './pages/master/TranscodeList';
+import TransactionList from './pages/master/TransactionList';
 import PurchaseOrderList from './pages/transaction/PurchaseOrderList';
 import SalesOrderList from './pages/transaction/SalesOrderList';
 import './index.css';
@@ -32,12 +35,18 @@ function App() {
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
             case 'item':
                 return <ItemList />;
+            case 'unit':
+                return <UnitList />;
             case 'supplier':
                 return <PartnerList type="Supplier" />;
             case 'customer':
                 return <PartnerList type="Customer" />;
             case 'salesperson':
                 return <SalesPersonList />;
+            case 'transcode':
+                return <TranscodeList />;
+            case 'transaction':
+                return <TransactionList />;
             case 'purchase-order':
                 return <PurchaseOrderList />;
             case 'sales-order':
