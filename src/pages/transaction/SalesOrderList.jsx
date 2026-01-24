@@ -13,8 +13,12 @@ function SalesOrderList() {
         partner_id: '',
         salesperson_id: '',
         status: 'Draft',
-        details: []
+        salesperson_id: '',
+        status: 'Draft',
+        details: [],
+        transcode_id: ''
     });
+    const [transcodes, setTranscodes] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -37,19 +41,41 @@ function SalesOrderList() {
 
     const fetchMasterData = async () => {
         try {
-            const [custRes, spRes, itemRes] = await Promise.all([
+            const [custRes, spRes, itemRes, transRes] = await Promise.all([
                 fetch('/api/partners?type=Customer'),
                 fetch('/api/salespersons'),
-                fetch('/api/items')
+                fetch('/api/items'),
+                fetch('/api/transcodes')
             ]);
             const custData = await custRes.json();
             const spData = await spRes.json();
             const itemData = await itemRes.json();
+            const transData = await transRes.json();
+
             if (custData.success) setCustomers(custData.data);
             if (spData.success) setSalesPersons(spData.data);
             if (itemData.success) setItems(itemData.data);
+            if (transData.success) {
+                // Filter specifically for SO (nomortranscode = 2)
+                const soTranscodes = transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 2);
+                setTranscodes(soTranscodes);
+            }
         } catch (error) {
             console.error('Error:', error);
+        }
+    };
+
+    const generateNumber = async (code) => {
+        try {
+            const response = await fetch(`/api/transcodes/${code}/generate`);
+            const data = await response.json();
+            if (data.success) {
+                setFormData(prev => ({ ...prev, doc_number: data.doc_number }));
+            } else {
+                alert('Gagal generate nomor dokumen: ' + data.error);
+            }
+        } catch (error) {
+            console.error('Error generating number:', error);
         }
     };
 
@@ -132,12 +158,13 @@ function SalesOrderList() {
 
     const resetForm = () => {
         setFormData({
-            doc_number: generateDocNumber(),
+            doc_number: '', // Auto-generated based on selection
             doc_date: new Date().toISOString().split('T')[0],
             partner_id: '',
             salesperson_id: '',
             status: 'Draft',
-            details: []
+            details: [],
+            transcode_id: ''
         });
     };
 
@@ -173,8 +200,28 @@ function SalesOrderList() {
                         <form onSubmit={handleSubmit}>
                             <div className="form-row">
                                 <div className="form-group">
+                                    <label>Tipe Transaksi</label>
+                                    <select
+                                        value={formData.transcode_id}
+                                        onChange={(e) => {
+                                            const selectedId = parseInt(e.target.value);
+                                            const selectedTranscode = transcodes.find(t => t.id === selectedId);
+                                            setFormData({ ...formData, transcode_id: selectedId });
+                                            if (selectedTranscode) {
+                                                generateNumber(selectedTranscode.code);
+                                            }
+                                        }}
+                                        required
+                                    >
+                                        <option value="">-- Pilih Tipe Transaksi --</option>
+                                        {transcodes.map(tc => (
+                                            <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="form-group">
                                     <label>No. Dokumen</label>
-                                    <input type="text" value={formData.doc_number} readOnly />
+                                    <input type="text" value={formData.doc_number} readOnly placeholder="Otomatis" />
                                 </div>
                                 <div className="form-group">
                                     <label>Tanggal</label>

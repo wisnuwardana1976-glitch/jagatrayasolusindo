@@ -4,6 +4,7 @@ function PurchaseOrderList() {
     const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
+    const [editingItem, setEditingItem] = useState(null);
     const [suppliers, setSuppliers] = useState([]);
     const [items, setItems] = useState([]);
     const [formData, setFormData] = useState({
@@ -11,8 +12,11 @@ function PurchaseOrderList() {
         doc_date: new Date().toISOString().split('T')[0],
         partner_id: '',
         status: 'Draft',
-        details: []
+        status: 'Draft',
+        details: [],
+        transcode_id: ''
     });
+    const [transcodes, setTranscodes] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -35,16 +39,38 @@ function PurchaseOrderList() {
 
     const fetchMasterData = async () => {
         try {
-            const [suppRes, itemRes] = await Promise.all([
+            const [suppRes, itemRes, transRes] = await Promise.all([
                 fetch('/api/partners?type=Supplier'),
-                fetch('/api/items')
+                fetch('/api/items'),
+                fetch('/api/transcodes')
             ]);
             const suppData = await suppRes.json();
             const itemData = await itemRes.json();
+            const transData = await transRes.json();
+
             if (suppData.success) setSuppliers(suppData.data);
             if (itemData.success) setItems(itemData.data);
+            if (transData.success) {
+                // Filter specifically for PO (nomortranscode = 1)
+                const poTranscodes = transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 1);
+                setTranscodes(poTranscodes);
+            }
         } catch (error) {
             console.error('Error:', error);
+        }
+    };
+
+    const generateNumber = async (code) => {
+        try {
+            const response = await fetch(`/api/transcodes/${code}/generate`);
+            const data = await response.json();
+            if (data.success) {
+                setFormData(prev => ({ ...prev, doc_number: data.doc_number }));
+            } else {
+                alert('Gagal generate nomor dokumen: ' + data.error);
+            }
+        } catch (error) {
+            console.error('Error generating number:', error);
         }
     };
 
@@ -64,8 +90,11 @@ function PurchaseOrderList() {
             return;
         }
         try {
-            const response = await fetch('/api/purchase-orders', {
-                method: 'POST',
+            const url = editingItem ? `/api/purchase-orders/${editingItem}` : '/api/purchase-orders';
+            const method = editingItem ? 'PUT' : 'POST';
+
+            const response = await fetch(url, {
+                method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData)
             });
@@ -74,7 +103,59 @@ function PurchaseOrderList() {
             if (data.success) {
                 alert(data.message);
                 setShowForm(false);
+                setEditingItem(null);
                 resetForm();
+                fetchData();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    };
+
+    const handleEdit = async (id) => {
+        try {
+            const response = await fetch(`/api/purchase-orders/${id}`);
+            const data = await response.json();
+            if (data.success) {
+                const po = data.data;
+                // Find transcode based on doc_number prefix or pattern? 
+                // Since we don't store transcode_id, we might need to rely on the user re-selecting if they want to change it, 
+                // OR better: just keep existing number and generic type logic.
+                // For now, let's load the data.
+
+                // Try to guess transcode from available list if needed, or just leave blank/find first match
+                // Ideally backend should store transcode_id but it doesnt yet.
+                // We'll trust the doc_number.
+
+                setFormData({
+                    doc_number: po.doc_number,
+                    doc_date: new Date(po.doc_date).toISOString().split('T')[0],
+                    partner_id: po.partner_id || '',
+                    status: po.status,
+                    details: po.details.map(d => ({
+                        item_id: d.item_id,
+                        quantity: parseFloat(d.quantity),
+                        unit_price: parseFloat(d.unit_price) // Ensure number
+                    })),
+                    transcode_id: '' // Can't easily recover without stored ID, user might need to re-select if regenerating
+                });
+                setEditingItem(id);
+                setShowForm(true);
+            }
+        } catch (error) {
+            alert('Error fetching details: ' + error.message);
+        }
+    };
+
+    const handleApprove = async (id) => {
+        if (!confirm('Approve Purchase Order ini? Status akan menjadi Approved dan tidak bisa diedit lagi.')) return;
+        try {
+            const response = await fetch(`/api/purchase-orders/${id}/approve`, { method: 'PUT' });
+            const data = await response.json();
+            if (data.success) {
+                alert(data.message);
                 fetchData();
             } else {
                 alert('Error: ' + data.error);
@@ -126,12 +207,14 @@ function PurchaseOrderList() {
     };
 
     const resetForm = () => {
+        setEditingItem(null);
         setFormData({
-            doc_number: generateDocNumber(),
+            doc_number: '', // Auto-generated based on selection
             doc_date: new Date().toISOString().split('T')[0],
             partner_id: '',
             status: 'Draft',
-            details: []
+            details: [],
+            transcode_id: ''
         });
     };
 
@@ -161,14 +244,34 @@ function PurchaseOrderList() {
                 <div className="modal-overlay">
                     <div className="modal modal-large">
                         <div className="modal-header">
-                            <h3>Buat Purchase Order Baru</h3>
+                            <h3>{editingItem ? 'Edit Purchase Order' : 'Buat Purchase Order Baru'}</h3>
                             <button className="modal-close" onClick={() => setShowForm(false)}>×</button>
                         </div>
                         <form onSubmit={handleSubmit}>
                             <div className="form-row">
                                 <div className="form-group">
+                                    <label>Tipe Transaksi</label>
+                                    <select
+                                        value={formData.transcode_id}
+                                        onChange={(e) => {
+                                            const selectedId = parseInt(e.target.value);
+                                            const selectedTranscode = transcodes.find(t => t.id === selectedId);
+                                            setFormData({ ...formData, transcode_id: selectedId });
+                                            if (selectedTranscode) {
+                                                generateNumber(selectedTranscode.code);
+                                            }
+                                        }}
+                                        required
+                                    >
+                                        <option value="">-- Pilih Tipe Transaksi --</option>
+                                        {transcodes.map(tc => (
+                                            <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="form-group">
                                     <label>No. Dokumen</label>
-                                    <input type="text" value={formData.doc_number} readOnly />
+                                    <input type="text" value={formData.doc_number} readOnly placeholder="Otomatis" />
                                 </div>
                                 <div className="form-group">
                                     <label>Tanggal</label>
@@ -269,7 +372,7 @@ function PurchaseOrderList() {
 
                             <div className="form-actions">
                                 <button type="button" className="btn btn-outline" onClick={() => setShowForm(false)}>Batal</button>
-                                <button type="submit" className="btn btn-primary">Simpan PO</button>
+                                <button type="submit" className="btn btn-primary">{editingItem ? 'Update PO' : 'Simpan PO'}</button>
                             </div>
                         </form>
                     </div>
@@ -315,7 +418,16 @@ function PurchaseOrderList() {
                                             </span>
                                         </td>
                                         <td style={{ textAlign: 'center' }}>
-                                            <button className="btn-icon" onClick={() => handleDelete(order.id)} title="Hapus">🗑️</button>
+                                            {order.status === 'Draft' && (
+                                                <>
+                                                    <button className="btn-icon" onClick={() => handleApprove(order.id)} title="Approve" style={{ color: 'green', marginRight: '5px' }}>✅</button>
+                                                    <button className="btn-icon" onClick={() => handleEdit(order.id)} title="Edit" style={{ marginRight: '5px' }}>✏️</button>
+                                                    <button className="btn-icon" onClick={() => handleDelete(order.id)} title="Hapus">🗑️</button>
+                                                </>
+                                            )}
+                                            {order.status === 'Approved' && (
+                                                <span style={{ fontSize: '0.8rem', color: 'green' }}>Locked</span>
+                                            )}
                                         </td>
                                     </tr>
                                 ))

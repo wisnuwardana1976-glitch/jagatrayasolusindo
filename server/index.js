@@ -547,6 +547,16 @@ app.delete('/api/purchase-orders/:id', async (req, res) => {
   }
 });
 
+app.put('/api/purchase-orders/:id/approve', async (req, res) => {
+  try {
+    // Optional: Validate status is Draft before approving
+    await executeQuery('UPDATE PurchaseOrders SET status = ? WHERE id = ?', ['Approved', req.params.id]);
+    res.json({ success: true, message: 'Purchase Order berhasil di-approve' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== SALES ORDERS ====================
 app.get('/api/sales-orders', async (req, res) => {
   try {
