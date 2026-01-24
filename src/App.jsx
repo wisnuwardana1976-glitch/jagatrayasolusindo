@@ -9,6 +9,11 @@ import TranscodeList from './pages/master/TranscodeList';
 import TransactionList from './pages/master/TransactionList';
 import CoaList from './pages/master/CoaList';
 import AccountGroupList from './pages/master/AccountGroupList';
+import EntityList from './pages/master/EntityList';
+import SiteList from './pages/master/SiteList';
+import WarehouseList from './pages/master/WarehouseList';
+import SubWarehouseList from './pages/master/SubWarehouseList';
+import LocationList from './pages/master/LocationList';
 import PurchaseOrderList from './pages/transaction/PurchaseOrderList';
 import SalesOrderList from './pages/transaction/SalesOrderList';
 import './index.css';
@@ -35,6 +40,16 @@ function App() {
         switch (currentPage) {
             case 'dashboard':
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
+            case 'entity':
+                return <EntityList />;
+            case 'site':
+                return <SiteList />;
+            case 'warehouse':
+                return <WarehouseList />;
+            case 'sub-warehouse':
+                return <SubWarehouseList />;
+            case 'location':
+                return <LocationList />;
             case 'item':
                 return <ItemList />;
             case 'unit':

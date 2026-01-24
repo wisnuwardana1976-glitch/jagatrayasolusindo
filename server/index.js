@@ -440,6 +440,301 @@ app.delete('/api/salespersons/:id', async (req, res) => {
   }
 });
 
+// ==================== ENTITIES (MASTER ENTITY) ====================
+app.get('/api/entities', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Entities ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/entities/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Entities WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/entities', async (req, res) => {
+  try {
+    const { code, name, address, phone, email, tax_id, active } = req.body;
+    await executeQuery(
+      'INSERT INTO Entities (code, name, address, phone, email, tax_id, active) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [code, name, address || '', phone || '', email || '', tax_id || '', active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM Entities WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Entity berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/entities/:id', async (req, res) => {
+  try {
+    const { code, name, address, phone, email, tax_id, active } = req.body;
+    await executeQuery(
+      'UPDATE Entities SET code = ?, name = ?, address = ?, phone = ?, email = ?, tax_id = ?, active = ? WHERE id = ?',
+      [code, name, address, phone, email, tax_id, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'Entity berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/entities/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Entities WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Entity berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== SITES (MASTER SITE) ====================
+app.get('/api/sites', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT s.*, e.name as entity_name 
+      FROM Sites s
+      LEFT JOIN Entities e ON s.entity_id = e.id
+      ORDER BY s.code
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/sites/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Sites WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/sites', async (req, res) => {
+  try {
+    const { code, name, entity_id, address, phone, active } = req.body;
+    await executeQuery(
+      'INSERT INTO Sites (code, name, entity_id, address, phone, active) VALUES (?, ?, ?, ?, ?, ?)',
+      [code, name, entity_id || null, address || '', phone || '', active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM Sites WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Site berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/sites/:id', async (req, res) => {
+  try {
+    const { code, name, entity_id, address, phone, active } = req.body;
+    await executeQuery(
+      'UPDATE Sites SET code = ?, name = ?, entity_id = ?, address = ?, phone = ?, active = ? WHERE id = ?',
+      [code, name, entity_id || null, address, phone, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'Site berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/sites/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Sites WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Site berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== WAREHOUSES (MASTER WAREHOUSE) ====================
+app.get('/api/warehouses', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT w.*, s.name as site_name 
+      FROM Warehouses w
+      LEFT JOIN Sites s ON w.site_id = s.id
+      ORDER BY w.code
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/warehouses/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Warehouses WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/warehouses', async (req, res) => {
+  try {
+    const { code, description, site_id, active } = req.body;
+    await executeQuery(
+      'INSERT INTO Warehouses (code, description, site_id, active) VALUES (?, ?, ?, ?)',
+      [code, description, site_id || null, active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM Warehouses WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Warehouse berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/warehouses/:id', async (req, res) => {
+  try {
+    const { code, description, site_id, active } = req.body;
+    await executeQuery(
+      'UPDATE Warehouses SET code = ?, description = ?, site_id = ?, active = ? WHERE id = ?',
+      [code, description, site_id || null, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'Warehouse berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/warehouses/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Warehouses WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Warehouse berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== SUB WAREHOUSES (MASTER SUB WAREHOUSE) ====================
+app.get('/api/sub-warehouses', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT sw.*, w.description as warehouse_name 
+      FROM SubWarehouses sw
+      LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
+      ORDER BY sw.code
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/sub-warehouses/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM SubWarehouses WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/sub-warehouses', async (req, res) => {
+  try {
+    const { code, name, warehouse_id, active } = req.body;
+    await executeQuery(
+      'INSERT INTO SubWarehouses (code, name, warehouse_id, active) VALUES (?, ?, ?, ?)',
+      [code, name, warehouse_id || null, active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM SubWarehouses WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Sub Warehouse berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/sub-warehouses/:id', async (req, res) => {
+  try {
+    const { code, name, warehouse_id, active } = req.body;
+    await executeQuery(
+      'UPDATE SubWarehouses SET code = ?, name = ?, warehouse_id = ?, active = ? WHERE id = ?',
+      [code, name, warehouse_id || null, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'Sub Warehouse berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/sub-warehouses/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM SubWarehouses WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Sub Warehouse berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== LOCATIONS (MASTER LOCATION) ====================
+app.get('/api/locations', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT l.*, sw.name as sub_warehouse_name 
+      FROM Locations l
+      LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+      ORDER BY l.code
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/locations/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Locations WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/locations', async (req, res) => {
+  try {
+    const { code, name, sub_warehouse_id, active } = req.body;
+    await executeQuery(
+      'INSERT INTO Locations (code, name, sub_warehouse_id, active) VALUES (?, ?, ?, ?)',
+      [code, name, sub_warehouse_id || null, active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM Locations WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Location berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/locations/:id', async (req, res) => {
+  try {
+    const { code, name, sub_warehouse_id, active } = req.body;
+    await executeQuery(
+      'UPDATE Locations SET code = ?, name = ?, sub_warehouse_id = ?, active = ? WHERE id = ?',
+      [code, name, sub_warehouse_id || null, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'Location berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/locations/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Locations WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Location berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== PURCHASE ORDERS ====================
 app.get('/api/purchase-orders', async (req, res) => {
   try {

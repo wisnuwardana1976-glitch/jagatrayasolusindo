@@ -8,6 +8,11 @@ const menuItems = [
     {
         section: 'Master Data',
         items: [
+            { id: 'entity', label: 'Entity', icon: 'building' },
+            { id: 'site', label: 'Site', icon: 'map-pin' },
+            { id: 'warehouse', label: 'Warehouse', icon: 'home' },
+            { id: 'sub-warehouse', label: 'Sub Warehouse', icon: 'box' },
+            { id: 'location', label: 'Location', icon: 'map' },
             { id: 'supplier', label: 'Supplier', icon: 'truck' },
             { id: 'customer', label: 'Customer', icon: 'users' },
             { id: 'item', label: 'Master Item', icon: 'package' },
@@ -52,6 +57,36 @@ const icons = {
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
             <polyline points="9 22 9 12 15 12 15 22"></polyline>
+        </svg>
+    ),
+
+    building: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+            <line x1="9" y1="22" x2="9" y2="2"></line>
+            <path d="M5 12h14"></path>
+            <path d="M5 7h14"></path>
+            <path d="M5 17h14"></path>
+        </svg>
+    ),
+    'map-pin': (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+            <circle cx="12" cy="10" r="3"></circle>
+        </svg>
+
+map: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
+            <line x1="8" y1="2" x2="8" y2="18"></line>
+            <line x1="16" y1="6" x2="16" y2="22"></line>
+        </svg>
+    ),
+    box: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
         </svg>
     ),
     truck: (
