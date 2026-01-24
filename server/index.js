@@ -444,9 +444,10 @@ app.delete('/api/salespersons/:id', async (req, res) => {
 app.get('/api/purchase-orders', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT po.*, p.name as partner_name, p.code as partner_code
+      SELECT po.*, p.name as partner_name, p.code as partner_code, t.name as transcode_name
       FROM PurchaseOrders po
       LEFT JOIN Partners p ON po.partner_id = p.id
+      LEFT JOIN Transcodes t ON po.transcode_id = t.id
       ORDER BY po.doc_date DESC, po.doc_number DESC
     `);
     res.json({ success: true, data: result });
@@ -479,15 +480,15 @@ app.get('/api/purchase-orders/:id', async (req, res) => {
 
 app.post('/api/purchase-orders', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, status, details } = req.body;
+    const { doc_number, doc_date, partner_id, status, details, transcode_id } = req.body;
 
     // Calculate total
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     // Insert header
     await executeQuery(
-      'INSERT INTO PurchaseOrders (doc_number, doc_date, partner_id, status, total_amount) VALUES (?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, status || 'Draft', total]
+      'INSERT INTO PurchaseOrders (doc_number, doc_date, partner_id, status, total_amount, transcode_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, status || 'Draft', total, transcode_id || null]
     );
 
     // Get inserted ID
@@ -512,12 +513,12 @@ app.post('/api/purchase-orders', async (req, res) => {
 
 app.put('/api/purchase-orders/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, status, details } = req.body;
+    const { doc_number, doc_date, partner_id, status, details, transcode_id } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, status, total, req.params.id]
+      'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ?, transcode_id = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, status, total, transcode_id || null, req.params.id]
     );
 
     // Update details - delete old and insert new
@@ -561,10 +562,11 @@ app.put('/api/purchase-orders/:id/approve', async (req, res) => {
 app.get('/api/sales-orders', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT so.*, p.name as partner_name, p.code as partner_code, sp.name as salesperson_name
+      SELECT so.*, p.name as partner_name, p.code as partner_code, sp.name as salesperson_name, t.name as transcode_name
       FROM SalesOrders so
       LEFT JOIN Partners p ON so.partner_id = p.id
       LEFT JOIN SalesPersons sp ON so.salesperson_id = sp.id
+      LEFT JOIN Transcodes t ON so.transcode_id = t.id
       ORDER BY so.doc_date DESC, so.doc_number DESC
     `);
     res.json({ success: true, data: result });
@@ -598,12 +600,12 @@ app.get('/api/sales-orders/:id', async (req, res) => {
 
 app.post('/api/sales-orders', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, salesperson_id, status, details } = req.body;
+    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, salesperson_id, status, total_amount) VALUES (?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total]
+      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, salesperson_id, status, total_amount, transcode_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total, transcode_id || null]
     );
 
     const soResult = await executeQuery('SELECT * FROM SalesOrders WHERE doc_number = ?', [doc_number]);
@@ -626,12 +628,12 @@ app.post('/api/sales-orders', async (req, res) => {
 
 app.put('/api/sales-orders/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, salesperson_id, status, details } = req.body;
+    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, salesperson_id = ?, status = ?, total_amount = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, salesperson_id, status, total, req.params.id]
+      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, salesperson_id = ?, status = ?, total_amount = ?, transcode_id = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, salesperson_id, status, total, transcode_id, req.params.id]
     );
 
     await executeQuery('DELETE FROM SalesOrderDetails WHERE so_id = ?', [req.params.id]);
@@ -645,6 +647,15 @@ app.put('/api/sales-orders/:id', async (req, res) => {
     }
 
     res.json({ success: true, message: 'Sales Order berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/sales-orders/:id/approve', async (req, res) => {
+  try {
+    await executeQuery('UPDATE SalesOrders SET status = ? WHERE id = ?', ['Approved', req.params.id]);
+    res.json({ success: true, message: 'Sales Order berhasil di-approve' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

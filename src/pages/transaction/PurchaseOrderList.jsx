@@ -12,7 +12,6 @@ function PurchaseOrderList() {
         doc_date: new Date().toISOString().split('T')[0],
         partner_id: '',
         status: 'Draft',
-        status: 'Draft',
         details: [],
         transcode_id: ''
     });
@@ -139,7 +138,7 @@ function PurchaseOrderList() {
                         quantity: parseFloat(d.quantity),
                         unit_price: parseFloat(d.unit_price) // Ensure number
                     })),
-                    transcode_id: '' // Can't easily recover without stored ID, user might need to re-select if regenerating
+                    transcode_id: po.transcode_id || '' // Now we have it from backend
                 });
                 setEditingItem(id);
                 setShowForm(true);
