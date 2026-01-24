@@ -7,6 +7,8 @@ import SalesPersonList from './pages/master/SalesPersonList';
 import UnitList from './pages/master/UnitList';
 import TranscodeList from './pages/master/TranscodeList';
 import TransactionList from './pages/master/TransactionList';
+import CoaList from './pages/master/CoaList';
+import AccountGroupList from './pages/master/AccountGroupList';
 import PurchaseOrderList from './pages/transaction/PurchaseOrderList';
 import SalesOrderList from './pages/transaction/SalesOrderList';
 import './index.css';
@@ -47,6 +49,10 @@ function App() {
                 return <TranscodeList />;
             case 'transaction':
                 return <TransactionList />;
+            case 'coa':
+                return <CoaList />;
+            case 'account-group':
+                return <AccountGroupList />;
             case 'purchase-order':
                 return <PurchaseOrderList />;
             case 'sales-order':

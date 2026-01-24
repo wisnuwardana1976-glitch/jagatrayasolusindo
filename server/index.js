@@ -830,10 +830,68 @@ app.get('/api/journal-vouchers', async (req, res) => {
 });
 
 // ==================== CHART OF ACCOUNTS ====================
+// ==================== CHART OF ACCOUNTS ====================
 app.get('/api/accounts', async (req, res) => {
   try {
-    const result = await executeQuery('SELECT * FROM ChartOfAccounts ORDER BY code');
+    // Left join self for parent name if needed, or just fetch all
+    const result = await executeQuery(`
+      SELECT a.*, p.name as parent_name 
+      FROM Accounts a
+      LEFT JOIN Accounts p ON a.parent_id = p.id
+      ORDER BY a.code
+    `);
     res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/accounts/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Accounts WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/accounts', async (req, res) => {
+  try {
+    const { code, name, type, level, parent_id, active } = req.body;
+    await executeQuery(
+      'INSERT INTO Accounts (code, name, type, level, parent_id, active) VALUES (?, ?, ?, ?, ?, ?)',
+      [code, name, type, level || 1, parent_id || null, active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM Accounts WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Akun berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Database error: ' + error.message });
+  }
+});
+
+app.put('/api/accounts/:id', async (req, res) => {
+  try {
+    const { code, name, type, level, parent_id, active } = req.body;
+    await executeQuery(
+      'UPDATE Accounts SET code = ?, name = ?, type = ?, level = ?, parent_id = ?, active = ? WHERE id = ?',
+      [code, name, type, level, parent_id || null, active, req.params.id]
+    );
+    res.json({ success: true, message: 'Akun berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/accounts/:id', async (req, res) => {
+  try {
+    // Check for children
+    const children = await executeQuery('SELECT COUNT(*) as count FROM Accounts WHERE parent_id = ?', [req.params.id]);
+    if (children[0].count > 0) {
+      return res.status(400).json({ success: false, error: 'Tidak bisa menghapus akun yang memiliki sub-akun.' });
+    }
+
+    await executeQuery('DELETE FROM Accounts WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Akun berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -866,6 +924,52 @@ app.get('/api/dashboard/stats', async (req, res) => {
         salesOrders: so[0]?.count || 0
       }
     });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== ACCOUNT GROUPS ====================
+app.get('/api/account-groups', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM AccountGroups ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/account-groups', async (req, res) => {
+  try {
+    const { code, description, active } = req.body;
+    await executeQuery(
+      'INSERT INTO AccountGroups (code, description, active) VALUES (?, ?, ?)',
+      [code, description, active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM AccountGroups WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Group Akun berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/account-groups/:id', async (req, res) => {
+  try {
+    const { code, description, active } = req.body;
+    await executeQuery(
+      'UPDATE AccountGroups SET code = ?, description = ?, active = ? WHERE id = ?',
+      [code, description, active, req.params.id]
+    );
+    res.json({ success: true, message: 'Group Akun berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/account-groups/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM AccountGroups WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Group Akun berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

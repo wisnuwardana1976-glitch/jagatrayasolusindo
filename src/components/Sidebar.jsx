@@ -14,6 +14,8 @@ const menuItems = [
             { id: 'unit', label: 'Satuan', icon: 'ruler' },
             { id: 'transcode', label: 'Tipe Transaksi', icon: 'hash' },
             { id: 'transaction', label: 'Transcode', icon: 'list' },
+            { id: 'coa', label: 'Chart of Accounts', icon: 'book-open' },
+            { id: 'account-group', label: 'Group COA', icon: 'list' },
             { id: 'salesperson', label: 'Sales Person', icon: 'user' },
         ],
     },
