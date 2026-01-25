@@ -8,6 +8,7 @@ import UnitList from './pages/master/UnitList';
 import TranscodeList from './pages/master/TranscodeList';
 import TransactionList from './pages/master/TransactionList';
 import CoaList from './pages/master/CoaList';
+import CoaSegmentList from './pages/master/CoaSegmentList';
 import AccountGroupList from './pages/master/AccountGroupList';
 import EntityList from './pages/master/EntityList';
 import SiteList from './pages/master/SiteList';
@@ -16,6 +17,9 @@ import SubWarehouseList from './pages/master/SubWarehouseList';
 import LocationList from './pages/master/LocationList';
 import PurchaseOrderList from './pages/transaction/PurchaseOrderList';
 import SalesOrderList from './pages/transaction/SalesOrderList';
+import ReceivingList from './pages/transaction/ReceivingList';
+import MenuSettings from './pages/settings/MenuSettings';
+import PaymentTermList from './pages/master/PaymentTermList';
 import './index.css';
 
 function App() {
@@ -68,10 +72,18 @@ function App() {
                 return <CoaList />;
             case 'account-group':
                 return <AccountGroupList />;
+            case 'coa-segment':
+                return <CoaSegmentList />;
             case 'purchase-order':
                 return <PurchaseOrderList />;
+            case 'receiving':
+                return <ReceivingList />;
             case 'sales-order':
                 return <SalesOrderList />;
+            case 'menu-settings':
+                return <MenuSettings />;
+            case 'payment-term':
+                return <PaymentTermList />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

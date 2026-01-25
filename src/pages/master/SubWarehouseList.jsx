@@ -150,7 +150,7 @@ function SubWarehouseList() {
                                 >
                                     <option value="">-- Pilih Warehouse --</option>
                                     {warehouses.map(w => (
-                                        <option key={w.id} value={w.id}>{w.name}</option>
+                                        <option key={w.id} value={w.id}>{w.description}</option>
                                     ))}
                                 </select>
                             </div>

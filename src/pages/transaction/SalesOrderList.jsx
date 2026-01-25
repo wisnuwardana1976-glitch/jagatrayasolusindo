@@ -15,9 +15,14 @@ function SalesOrderList() {
         salesperson_id: '',
         status: 'Draft',
         details: [],
-        transcode_id: ''
+        transcode_id: '',
+        details: [],
+        transcode_id: '',
+        tax_type: 'Exclude', // 'Exclude' | 'Include' | 'No Tax'
+        payment_term_id: ''
     });
     const [transcodes, setTranscodes] = useState([]);
+    const [paymentTerms, setPaymentTerms] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -40,16 +45,18 @@ function SalesOrderList() {
 
     const fetchMasterData = async () => {
         try {
-            const [custRes, spRes, itemRes, transRes] = await Promise.all([
+            const [custRes, spRes, itemRes, transRes, topRes] = await Promise.all([
                 fetch('/api/partners?type=Customer'),
                 fetch('/api/salespersons'),
                 fetch('/api/items'),
-                fetch('/api/transcodes')
+                fetch('/api/transcodes'),
+                fetch('/api/payment-terms')
             ]);
             const custData = await custRes.json();
             const spData = await spRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
+            const topData = await topRes.json();
 
             if (custData.success) setCustomers(custData.data);
             if (spData.success) setSalesPersons(spData.data);
@@ -59,6 +66,7 @@ function SalesOrderList() {
                 const soTranscodes = transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 2);
                 setTranscodes(soTranscodes);
             }
+            if (topData.success) setPaymentTerms(topData.data.filter(t => t.active === 'Y'));
         } catch (error) {
             console.error('Error:', error);
         }
@@ -135,7 +143,10 @@ function SalesOrderList() {
                         quantity: parseFloat(d.quantity),
                         unit_price: parseFloat(d.unit_price)
                     })),
-                    transcode_id: so.transcode_id || ''
+                    transcode_id: so.transcode_id || '',
+                    transcode_id: so.transcode_id || '',
+                    tax_type: so.tax_type || (so.ppn_included !== undefined ? (so.ppn_included ? 'Exclude' : 'No Tax') : 'Exclude'),
+                    payment_term_id: so.payment_term_id || ''
                 });
                 setEditingItem(id);
                 setShowForm(true);
@@ -160,6 +171,22 @@ function SalesOrderList() {
         try {
             // Reusing the same pattern, assuming I will add the endpoint
             const response = await fetch(`/api/sales-orders/${id}/approve`, { method: 'PUT' });
+            const data = await response.json();
+            if (data.success) {
+                alert(data.message);
+                fetchData();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    };
+
+    const handleUnapprove = async (id) => {
+        if (!confirm('Unapprove Sales Order ini? Status akan kembali menjadi Draft.')) return;
+        try {
+            const response = await fetch(`/api/sales-orders/${id}/unapprove`, { method: 'PUT' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -216,13 +243,17 @@ function SalesOrderList() {
     const resetForm = () => {
         setEditingItem(null);
         setFormData({
-            doc_number: '', // Auto-generated based on selection
+            doc_number: '',
             doc_date: new Date().toISOString().split('T')[0],
             partner_id: '',
             salesperson_id: '',
             status: 'Draft',
             details: [],
-            transcode_id: ''
+            transcode_id: '',
+            details: [],
+            transcode_id: '',
+            tax_type: 'Exclude',
+            payment_term_id: ''
         });
     };
 
@@ -234,8 +265,55 @@ function SalesOrderList() {
         return new Date(date).toLocaleDateString('id-ID');
     };
 
-    const calculateTotal = () => {
+    const calculateSubtotal = () => {
         return formData.details.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0);
+    };
+
+    const calculatePPN = () => {
+        if (formData.tax_type === 'No Tax') return 0;
+
+        const subtotal = calculateSubtotal();
+        if (formData.tax_type === 'Include') {
+            const taxBase = subtotal / 1.11;
+            return subtotal - taxBase;
+        } else {
+            return subtotal * 0.11;
+        }
+    };
+
+    const calculateGrandTotal = () => {
+        const subtotal = calculateSubtotal();
+        const ppn = calculatePPN();
+
+        if (formData.tax_type === 'Include') {
+            return subtotal;
+        } else {
+            return subtotal + ppn;
+        }
+    };
+
+    const getFooterDisplay = () => {
+        const subtotal = calculateSubtotal();
+        const ppn = calculatePPN();
+
+        if (formData.tax_type === 'Include') {
+            const taxBase = subtotal / 1.11;
+            return {
+                subtotalLabel: 'Subtotal (Gross)',
+                subtotalValue: subtotal,
+                taxBaseLabel: 'DPP (Tax Base)',
+                taxBaseValue: taxBase,
+                ppnValue: ppn
+            };
+        }
+
+        return {
+            subtotalLabel: 'Subtotal',
+            subtotalValue: subtotal,
+            taxBaseLabel: null,
+            taxBaseValue: null,
+            ppnValue: ppn
+        };
     };
 
     return (
@@ -252,7 +330,10 @@ function SalesOrderList() {
                 <div className="modal-overlay">
                     <div className="modal modal-large">
                         <div className="modal-header">
-                            <h3>{editingItem ? 'Edit Sales Order' : 'Buat Sales Order Baru'}</h3>
+                            <h3>
+                                {editingItem ? (formData.status === 'Approved' ? 'Detail Sales Order' : 'Edit Sales Order') : 'Buat Sales Order Baru'}
+                                {formData.status === 'Approved' && <span className="badge badge-success" style={{ marginLeft: '10px' }}>Approved - Read Only</span>}
+                            </h3>
                             <button className="modal-close" onClick={() => setShowForm(false)}>×</button>
                         </div>
                         <form onSubmit={handleSubmit}>
@@ -270,6 +351,7 @@ function SalesOrderList() {
                                             }
                                         }}
                                         required
+                                        disabled={formData.status === 'Approved'}
                                     >
                                         <option value="">-- Pilih Tipe Transaksi --</option>
                                         {transcodes.map(tc => (
@@ -287,6 +369,7 @@ function SalesOrderList() {
                                         type="date"
                                         value={formData.doc_date}
                                         onChange={(e) => setFormData({ ...formData, doc_date: e.target.value })}
+                                        disabled={formData.status === 'Approved'}
                                     />
                                 </div>
                             </div>
@@ -297,6 +380,7 @@ function SalesOrderList() {
                                         value={formData.partner_id}
                                         onChange={(e) => setFormData({ ...formData, partner_id: e.target.value })}
                                         required
+                                        disabled={formData.status === 'Approved'}
                                     >
                                         <option value="">-- Pilih Customer --</option>
                                         {customers.map(c => (
@@ -305,10 +389,24 @@ function SalesOrderList() {
                                     </select>
                                 </div>
                                 <div className="form-group">
+                                    <label>Term of Payment</label>
+                                    <select
+                                        value={formData.payment_term_id}
+                                        onChange={(e) => setFormData({ ...formData, payment_term_id: e.target.value })}
+                                        disabled={formData.status === 'Approved'}
+                                    >
+                                        <option value="">-- Pilih TOP --</option>
+                                        {paymentTerms.map(t => (
+                                            <option key={t.id} value={t.id}>{t.code} - {t.name} ({t.days} hari)</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="form-group">
                                     <label>Sales Person</label>
                                     <select
                                         value={formData.salesperson_id}
                                         onChange={(e) => setFormData({ ...formData, salesperson_id: e.target.value })}
+                                        disabled={formData.status === 'Approved'}
                                     >
                                         <option value="">-- Pilih Sales --</option>
                                         {salesPersons.map(sp => (
@@ -322,7 +420,9 @@ function SalesOrderList() {
                             <div className="form-section">
                                 <div className="form-section-header">
                                     <h4>Detail Item</h4>
-                                    <button type="button" className="btn btn-outline" onClick={addDetailLine}>+ Tambah Baris</button>
+                                    {formData.status !== 'Approved' && (
+                                        <button type="button" className="btn btn-outline" onClick={addDetailLine}>+ Tambah Baris</button>
+                                    )}
                                 </div>
                                 <table className="data-table">
                                     <thead>
@@ -338,7 +438,7 @@ function SalesOrderList() {
                                         {formData.details.length === 0 ? (
                                             <tr>
                                                 <td colSpan="5" style={{ textAlign: 'center', padding: '1rem' }}>
-                                                    Belum ada item. Klik "Tambah Baris" untuk menambah item.
+                                                    {formData.status === 'Approved' ? 'Tidak ada item' : 'Belum ada item. Klik "Tambah Baris" untuk menambah item.'}
                                                 </td>
                                             </tr>
                                         ) : (
@@ -349,6 +449,7 @@ function SalesOrderList() {
                                                             value={detail.item_id}
                                                             onChange={(e) => updateDetailLine(idx, 'item_id', e.target.value)}
                                                             required
+                                                            disabled={formData.status === 'Approved'}
                                                         >
                                                             <option value="">-- Pilih Item --</option>
                                                             {items.map(i => (
@@ -362,6 +463,7 @@ function SalesOrderList() {
                                                             min="1"
                                                             value={detail.quantity}
                                                             onChange={(e) => updateDetailLine(idx, 'quantity', parseFloat(e.target.value) || 0)}
+                                                            disabled={formData.status === 'Approved'}
                                                         />
                                                     </td>
                                                     <td>
@@ -370,31 +472,79 @@ function SalesOrderList() {
                                                             min="0"
                                                             value={detail.unit_price}
                                                             onChange={(e) => updateDetailLine(idx, 'unit_price', parseFloat(e.target.value) || 0)}
+                                                            disabled={formData.status === 'Approved'}
                                                         />
                                                     </td>
                                                     <td style={{ textAlign: 'right' }}>
                                                         {formatCurrency(detail.quantity * detail.unit_price)}
                                                     </td>
                                                     <td>
-                                                        <button type="button" className="btn-icon" onClick={() => removeDetailLine(idx)}>🗑️</button>
+                                                        {formData.status !== 'Approved' && (
+                                                            <button type="button" className="btn-icon" onClick={() => removeDetailLine(idx)}>🗑️</button>
+                                                        )}
                                                     </td>
                                                 </tr>
                                             ))
                                         )}
                                     </tbody>
                                     <tfoot>
-                                        <tr>
-                                            <td colSpan="3" style={{ textAlign: 'right', fontWeight: 'bold' }}>Total:</td>
-                                            <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{formatCurrency(calculateTotal())}</td>
-                                            <td></td>
-                                        </tr>
+                                        {(() => {
+                                            const display = getFooterDisplay();
+                                            return (
+                                                <>
+                                                    <tr>
+                                                        <td colSpan="3" style={{ textAlign: 'right' }}>{display.subtotalLabel}:</td>
+                                                        <td style={{ textAlign: 'right' }}>{formatCurrency(display.subtotalValue)}</td>
+                                                        <td></td>
+                                                    </tr>
+
+                                                    {display.taxBaseLabel && (
+                                                        <tr>
+                                                            <td colSpan="3" style={{ textAlign: 'right', color: '#666' }}>{display.taxBaseLabel}:</td>
+                                                            <td style={{ textAlign: 'right', color: '#666' }}>{formatCurrency(display.taxBaseValue)}</td>
+                                                            <td></td>
+                                                        </tr>
+                                                    )}
+
+                                                    <tr>
+                                                        <td colSpan="3" style={{ textAlign: 'right' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                                                Pajak (PPN 11%):
+                                                                <select
+                                                                    value={formData.tax_type}
+                                                                    onChange={(e) => setFormData({ ...formData, tax_type: e.target.value })}
+                                                                    style={{ width: 'auto', padding: '0.2rem', fontSize: '0.9rem' }}
+                                                                    disabled={formData.status === 'Approved'}
+                                                                >
+                                                                    <option value="Exclude">Exclude (Tambah)</option>
+                                                                    <option value="Include">Include (Termasuk)</option>
+                                                                    <option value="No Tax">No Tax (Tanpa Pajak)</option>
+                                                                </select>
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ textAlign: 'right' }}>{formatCurrency(display.ppnValue)}</td>
+                                                        <td></td>
+                                                    </tr>
+
+                                                    <tr style={{ fontWeight: 'bold', backgroundColor: '#f5f5f5' }}>
+                                                        <td colSpan="3" style={{ textAlign: 'right' }}>Grand Total:</td>
+                                                        <td style={{ textAlign: 'right' }}>{formatCurrency(calculateGrandTotal())}</td>
+                                                        <td></td>
+                                                    </tr>
+                                                </>
+                                            );
+                                        })()}
                                     </tfoot>
                                 </table>
                             </div>
 
                             <div className="form-actions">
-                                <button type="button" className="btn btn-outline" onClick={() => setShowForm(false)}>Batal</button>
-                                <button type="submit" className="btn btn-primary">{editingItem ? 'Update SO' : 'Simpan SO'}</button>
+                                <button type="button" className="btn btn-outline" onClick={() => setShowForm(false)}>
+                                    {formData.status === 'Approved' ? 'Tutup' : 'Batal'}
+                                </button>
+                                {formData.status !== 'Approved' && (
+                                    <button type="submit" className="btn btn-primary">{editingItem ? 'Update SO' : 'Simpan SO'}</button>
+                                )}
                             </div>
                         </form>
                     </div>
@@ -442,15 +592,17 @@ function SalesOrderList() {
                                             </span>
                                         </td>
                                         <td style={{ textAlign: 'center' }}>
-                                            {order.status === 'Draft' && (
+                                            {order.status === 'Draft' ? (
                                                 <>
                                                     <button className="btn-icon" onClick={() => handleApprove(order.id)} title="Approve" style={{ color: 'green', marginRight: '5px' }}>✅</button>
                                                     <button className="btn-icon" onClick={() => handleEdit(order.id)} title="Edit" style={{ marginRight: '5px' }}>✏️</button>
                                                     <button className="btn-icon" onClick={() => handleDelete(order.id)} title="Hapus">🗑️</button>
                                                 </>
-                                            )}
-                                            {order.status === 'Approved' && (
-                                                <span style={{ fontSize: '0.8rem', color: 'green' }}>Locked</span>
+                                            ) : (
+                                                <>
+                                                    <button className="btn-icon" onClick={() => handleUnapprove(order.id)} title="Unapprove" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
+                                                    <button className="btn-icon" onClick={() => handleEdit(order.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
+                                                </>
                                             )}
                                         </td>
                                     </tr>
@@ -460,7 +612,7 @@ function SalesOrderList() {
                     </table>
                 )}
             </div>
-        </div>
+        </div >
     );
 }
 

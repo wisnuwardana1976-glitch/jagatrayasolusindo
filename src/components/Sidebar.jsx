@@ -21,7 +21,17 @@ const menuItems = [
             { id: 'transaction', label: 'Transcode', icon: 'list' },
             { id: 'coa', label: 'Chart of Accounts', icon: 'book-open' },
             { id: 'account-group', label: 'Group COA', icon: 'list' },
+            { id: 'coa-segment', label: 'COA Segment', icon: 'hash' },
             { id: 'salesperson', label: 'Sales Person', icon: 'user' },
+            { id: 'payment-term', label: 'Term of Payment', icon: 'credit-card' },
+        ],
+    },
+    {
+        section: 'Warehouse Group',
+        items: [
+            { id: 'warehouse', label: 'Warehouse', icon: 'home' },
+            { id: 'sub-warehouse', label: 'Sub Warehouse', icon: 'box' },
+            { id: 'location', label: 'Location', icon: 'map' },
         ],
     },
     {
@@ -74,8 +84,9 @@ const icons = {
             <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
             <circle cx="12" cy="10" r="3"></circle>
         </svg>
+    ),
 
-map: (
+    map: (
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
             <line x1="8" y1="2" x2="8" y2="18"></line>
@@ -219,9 +230,75 @@ map: (
             <line x1="3" y1="18" x2="3.01" y2="18"></line>
         </svg>
     ),
+    'settings': (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+    ),
 };
 
+import { useState, useEffect } from 'react';
+
 function Sidebar({ currentPage, setCurrentPage }) {
+    const [activeMenuConfig, setActiveMenuConfig] = useState(null);
+
+    useEffect(() => {
+        loadMenuConfig();
+    }, []);
+
+    const loadMenuConfig = () => {
+        const saved = localStorage.getItem('sidebar_menu_config');
+        if (saved) {
+            try {
+                setActiveMenuConfig(JSON.parse(saved));
+            } catch (e) {
+                setActiveMenuConfig(null);
+            }
+        }
+    };
+
+    // Use saved config or default menuItems
+    const getDisplayMenu = () => {
+        if (!activeMenuConfig) {
+            return menuItems;
+        }
+
+        // Filter and sort based on saved config
+        return activeMenuConfig
+            .filter(section => section.visible)
+            .sort((a, b) => a.order - b.order)
+            .map(section => ({
+                section: section.section,
+                items: section.items
+                    .filter(item => item.visible)
+                    .sort((a, b) => a.order - b.order)
+            }));
+    };
+
+    const displayMenu = getDisplayMenu();
+
+    // Toggle section expansion
+    const toggleSection = (sectionName) => {
+        setExpandedSections(prev => ({
+            ...prev,
+            [sectionName]: !prev[sectionName]
+        }));
+    };
+
+    // Check if section has active item
+    const hasActiveItem = (section) => {
+        return section.items.some(item => item.id === currentPage);
+    };
+
+    // Initialize expanded sections state
+    const [expandedSections, setExpandedSections] = useState(() => {
+        // Default: expand all sections initially
+        const initial = {};
+        menuItems.forEach(s => { initial[s.section] = true; });
+        return initial;
+    });
+
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
@@ -229,10 +306,25 @@ function Sidebar({ currentPage, setCurrentPage }) {
                 <p>Enterprise Resource Planning</p>
             </div>
 
-            {menuItems.map((section) => (
+            {displayMenu.map((section) => (
                 <div key={section.section} className="nav-section">
-                    <div className="nav-section-title">{section.section}</div>
-                    {section.items.map((item) => (
+                    <div
+                        className="nav-section-title"
+                        onClick={() => toggleSection(section.section)}
+                        style={{
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            userSelect: 'none'
+                        }}
+                    >
+                        <span>{section.section}</span>
+                        <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                            {expandedSections[section.section] ? '▼' : '▶'}
+                        </span>
+                    </div>
+                    {expandedSections[section.section] && section.items.map((item) => (
                         <div
                             key={item.id}
                             className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
@@ -244,6 +336,35 @@ function Sidebar({ currentPage, setCurrentPage }) {
                     ))}
                 </div>
             ))}
+
+            {/* Settings Section - Always visible */}
+            <div className="nav-section">
+                <div
+                    className="nav-section-title"
+                    onClick={() => toggleSection('Pengaturan')}
+                    style={{
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        userSelect: 'none'
+                    }}
+                >
+                    <span>Pengaturan</span>
+                    <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                        {expandedSections['Pengaturan'] ? '▼' : '▶'}
+                    </span>
+                </div>
+                {expandedSections['Pengaturan'] !== false && (
+                    <div
+                        className={`nav-item ${currentPage === 'menu-settings' ? 'active' : ''}`}
+                        onClick={() => setCurrentPage('menu-settings')}
+                    >
+                        {icons['settings']}
+                        <span>Pengaturan Menu</span>
+                    </div>
+                )}
+            </div>
         </aside>
     );
 }

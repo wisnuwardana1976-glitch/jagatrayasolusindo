@@ -133,6 +133,61 @@ app.delete('/api/units/:id', async (req, res) => {
   }
 });
 
+// ==================== PAYMENT TERMS (MASTER TOP) ====================
+app.get('/api/payment-terms', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM PaymentTerms ORDER BY days, code');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/payment-terms/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM PaymentTerms WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/payment-terms', async (req, res) => {
+  try {
+    const { code, name, days, description, active } = req.body;
+    await executeQuery(
+      'INSERT INTO PaymentTerms (code, name, days, description, active) VALUES (?, ?, ?, ?, ?)',
+      [code, name, days || 0, description || '', active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM PaymentTerms WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Term of Payment berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/payment-terms/:id', async (req, res) => {
+  try {
+    const { code, name, days, description, active } = req.body;
+    await executeQuery(
+      'UPDATE PaymentTerms SET code = ?, name = ?, days = ?, description = ?, active = ? WHERE id = ?',
+      [code, name, days, description, active, req.params.id]
+    );
+    res.json({ success: true, message: 'Term of Payment berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/payment-terms/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM PaymentTerms WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Term of Payment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== TRANSACTIONS (MASTER TRANSAKSI) ====================
 app.get('/api/transactions', async (req, res) => {
   try {
@@ -754,9 +809,11 @@ app.get('/api/purchase-orders', async (req, res) => {
 app.get('/api/purchase-orders/:id', async (req, res) => {
   try {
     const po = await executeQuery(`
-      SELECT po.*, p.name as partner_name
+      SELECT po.*, p.name as partner_name, t.name as transcode_name, pt.name as payment_term_name
       FROM PurchaseOrders po
       LEFT JOIN Partners p ON po.partner_id = p.id
+      LEFT JOIN Transcodes t ON po.transcode_id = t.id
+      LEFT JOIN PaymentTerms pt ON po.payment_term_id = pt.id
       WHERE po.id = ?
     `, [req.params.id]);
 
@@ -775,15 +832,15 @@ app.get('/api/purchase-orders/:id', async (req, res) => {
 
 app.post('/api/purchase-orders', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, status, details, transcode_id } = req.body;
+    const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
 
     // Calculate total
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     // Insert header
     await executeQuery(
-      'INSERT INTO PurchaseOrders (doc_number, doc_date, partner_id, status, total_amount, transcode_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, status || 'Draft', total, transcode_id || null]
+      'INSERT INTO PurchaseOrders (doc_number, doc_date, partner_id, status, total_amount, transcode_id, payment_term_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude']
     );
 
     // Get inserted ID
@@ -808,12 +865,12 @@ app.post('/api/purchase-orders', async (req, res) => {
 
 app.put('/api/purchase-orders/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, status, details, transcode_id } = req.body;
+    const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ?, transcode_id = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, status, total, transcode_id || null, req.params.id]
+      'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, status, total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude', req.params.id]
     );
 
     // Update details - delete old and insert new
@@ -853,6 +910,16 @@ app.put('/api/purchase-orders/:id/approve', async (req, res) => {
   }
 });
 
+app.put('/api/purchase-orders/:id/unapprove', async (req, res) => {
+  try {
+    // Optional: Check if already processed (e.g. received)
+    await executeQuery('UPDATE PurchaseOrders SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    res.json({ success: true, message: 'Purchase Order berhasil di-unapprove (Kembali ke Draft)' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== SALES ORDERS ====================
 app.get('/api/sales-orders', async (req, res) => {
   try {
@@ -873,10 +940,11 @@ app.get('/api/sales-orders', async (req, res) => {
 app.get('/api/sales-orders/:id', async (req, res) => {
   try {
     const so = await executeQuery(`
-      SELECT so.*, p.name as partner_name, sp.name as salesperson_name
+      SELECT so.*, p.name as partner_name, sp.name as salesperson_name, pt.name as payment_term_name
       FROM SalesOrders so
       LEFT JOIN Partners p ON so.partner_id = p.id
       LEFT JOIN SalesPersons sp ON so.salesperson_id = sp.id
+      LEFT JOIN PaymentTerms pt ON so.payment_term_id = pt.id
       WHERE so.id = ?
     `, [req.params.id]);
 
@@ -895,12 +963,12 @@ app.get('/api/sales-orders/:id', async (req, res) => {
 
 app.post('/api/sales-orders', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id } = req.body;
+    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, salesperson_id, status, total_amount, transcode_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total, transcode_id || null]
+      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, salesperson_id, status, total_amount, transcode_id, payment_term_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude']
     );
 
     const soResult = await executeQuery('SELECT * FROM SalesOrders WHERE doc_number = ?', [doc_number]);
@@ -923,12 +991,12 @@ app.post('/api/sales-orders', async (req, res) => {
 
 app.put('/api/sales-orders/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id } = req.body;
+    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, salesperson_id = ?, status = ?, total_amount = ?, transcode_id = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, salesperson_id, status, total, transcode_id, req.params.id]
+      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, salesperson_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, salesperson_id, status, total, transcode_id, payment_term_id || null, tax_type || 'Exclude', req.params.id]
     );
 
     await executeQuery('DELETE FROM SalesOrderDetails WHERE so_id = ?', [req.params.id]);
@@ -956,6 +1024,15 @@ app.put('/api/sales-orders/:id/approve', async (req, res) => {
   }
 });
 
+app.put('/api/sales-orders/:id/unapprove', async (req, res) => {
+  try {
+    await executeQuery('UPDATE SalesOrders SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    res.json({ success: true, message: 'Sales Order berhasil di-unapprove (Kembali ke Draft)' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.delete('/api/sales-orders/:id', async (req, res) => {
   try {
     await executeQuery('DELETE FROM SalesOrderDetails WHERE so_id = ?', [req.params.id]);
@@ -970,11 +1047,14 @@ app.delete('/api/sales-orders/:id', async (req, res) => {
 app.get('/api/receivings', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT r.*, p.name as partner_name, po.doc_number as po_number
+      SELECT r.*, p.name as partner_name, po.doc_number as po_number, w.code as warehouse_code, l.name as location_name, t.name as transcode_name
       FROM Receivings r
       LEFT JOIN Partners p ON r.partner_id = p.id
       LEFT JOIN PurchaseOrders po ON r.po_id = po.id
-      ORDER BY r.doc_date DESC
+      LEFT JOIN Warehouses w ON r.warehouse_id = w.id
+      LEFT JOIN Locations l ON r.location_id = l.id
+      LEFT JOIN Transcodes t ON r.transcode_id = t.id
+      ORDER BY r.doc_date DESC, r.doc_number DESC
     `);
     res.json({ success: true, data: result });
   } catch (error) {
@@ -982,28 +1062,112 @@ app.get('/api/receivings', async (req, res) => {
   }
 });
 
+app.get('/api/receivings/:id', async (req, res) => {
+  try {
+    const header = await executeQuery(`
+      SELECT r.*, p.name as partner_name, po.doc_number as po_number, w.name as warehouse_name, l.name as location_name
+      FROM Receivings r
+      LEFT JOIN Partners p ON r.partner_id = p.id
+      LEFT JOIN PurchaseOrders po ON r.po_id = po.id
+      LEFT JOIN Warehouses w ON r.warehouse_id = w.id
+      LEFT JOIN Locations l ON r.location_id = l.id
+      WHERE r.id = ?
+    `, [req.params.id]);
+
+    const details = await executeQuery(`
+      SELECT d.*, i.code as item_code, i.name as item_name, u.code as unit_code
+      FROM ReceivingDetails d
+      LEFT JOIN Items i ON d.item_id = i.id
+      LEFT JOIN Units u ON i.unit_id = u.id
+      WHERE d.receiving_id = ?
+    `, [req.params.id]);
+
+    res.json({ success: true, data: { ...header[0], details } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.post('/api/receivings', async (req, res) => {
   try {
-    const { doc_number, doc_date, po_id, partner_id, status, details } = req.body;
+    const { doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, items, transcode_id, remarks } = req.body;
 
     await executeQuery(
-      'INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, status) VALUES (?, ?, ?, ?, ?)',
-      [doc_number, doc_date, po_id, partner_id, status || 'Draft']
+      'INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, transcode_id, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, po_id || null, partner_id, warehouse_id || null, location_id || null, status || 'Draft', transcode_id || null, remarks || '']
     );
 
     const result = await executeQuery('SELECT * FROM Receivings WHERE doc_number = ?', [doc_number]);
     const recId = result[0]?.id;
 
-    if (details && details.length > 0 && recId) {
-      for (const d of details) {
+    if (items && items.length > 0 && recId) {
+      for (const d of items) {
         await executeQuery(
-          'INSERT INTO ReceivingDetails (receiving_id, item_id, quantity) VALUES (?, ?, ?)',
-          [recId, d.item_id, d.quantity]
+          'INSERT INTO ReceivingDetails (receiving_id, item_id, quantity, remarks) VALUES (?, ?, ?, ?)',
+          [recId, d.item_id, d.quantity, d.remarks || '']
         );
       }
     }
 
     res.json({ success: true, data: result[0], message: 'Receiving berhasil dibuat' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/receivings/:id', async (req, res) => {
+  try {
+    const { doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, items, transcode_id, remarks } = req.body;
+
+    await executeQuery(
+      'UPDATE Receivings SET doc_number = ?, doc_date = ?, po_id = ?, partner_id = ?, warehouse_id = ?, location_id = ?, status = ?, transcode_id = ?, remarks = ? WHERE id = ?',
+      [doc_number, doc_date, po_id || null, partner_id, warehouse_id || null, location_id || null, status, transcode_id || null, remarks || '', req.params.id]
+    );
+
+    await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
+    if (items && items.length > 0) {
+      for (const d of items) {
+        await executeQuery(
+          'INSERT INTO ReceivingDetails (receiving_id, item_id, quantity, remarks) VALUES (?, ?, ?, ?)',
+          [req.params.id, d.item_id, d.quantity, d.remarks || '']
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'Receiving berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/receivings/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT status FROM Receivings WHERE id = ?', [req.params.id]);
+    if (result[0]?.status !== 'Draft') {
+      return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM Receivings WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Receiving berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/receivings/:id/approve', async (req, res) => {
+  try {
+    // In future: Add inventory transaction logic here
+    await executeQuery('UPDATE Receivings SET status = ? WHERE id = ?', ['Approved', req.params.id]);
+    res.json({ success: true, message: 'Receiving berhasil di-approve' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/receivings/:id/unapprove', async (req, res) => {
+  try {
+    await executeQuery('UPDATE Receivings SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    res.json({ success: true, message: 'Receiving berhasil di-unapprove (Kembali ke Draft)' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1265,6 +1429,61 @@ app.delete('/api/account-groups/:id', async (req, res) => {
   try {
     await executeQuery('DELETE FROM AccountGroups WHERE id = ?', [req.params.id]);
     res.json({ success: true, message: 'Group Akun berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== COA SEGMENTS ====================
+app.get('/api/coa-segments', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM CoaSegments ORDER BY segment_number');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/coa-segments/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM CoaSegments WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/coa-segments', async (req, res) => {
+  try {
+    const { segment_number, segment_name, description, active } = req.body;
+    await executeQuery(
+      'INSERT INTO CoaSegments (segment_number, segment_name, description, active) VALUES (?, ?, ?, ?)',
+      [segment_number, segment_name, description || '', active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM CoaSegments WHERE segment_number = ?', [segment_number]);
+    res.json({ success: true, data: result[0], message: 'COA Segment berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/coa-segments/:id', async (req, res) => {
+  try {
+    const { segment_number, segment_name, description, active } = req.body;
+    await executeQuery(
+      'UPDATE CoaSegments SET segment_number = ?, segment_name = ?, description = ?, active = ? WHERE id = ?',
+      [segment_number, segment_name, description, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'COA Segment berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/coa-segments/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CoaSegments WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'COA Segment berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
