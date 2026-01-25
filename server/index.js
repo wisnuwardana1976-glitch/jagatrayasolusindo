@@ -449,6 +449,135 @@ app.delete('/api/partners/:id', async (req, res) => {
   }
 });
 
+app.delete('/api/warehouses/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Warehouses WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Warehouse berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== SHIPMENTS ====================
+app.get('/api/shipments', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT s.*, p.name as customer_name, so.doc_number as so_number, t.name as transcode_name
+      FROM Shipments s
+      LEFT JOIN Partners p ON s.partner_id = p.id
+      LEFT JOIN SalesOrders so ON s.so_id = so.id
+      LEFT JOIN Transcodes t ON s.transcode_id = t.id
+      ORDER BY s.doc_date DESC, s.doc_number DESC
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/shipments/:id', async (req, res) => {
+  try {
+    const shipment = await executeQuery(`
+      SELECT s.*, p.name as customer_name, so.doc_number as so_number
+      FROM Shipments s
+      LEFT JOIN Partners p ON s.partner_id = p.id
+      LEFT JOIN SalesOrders so ON s.so_id = so.id
+      WHERE s.id = ?
+    `, [req.params.id]);
+
+    const details = await executeQuery(`
+      SELECT sd.*, i.code as item_code, i.name as item_name, i.unit as unit_code
+      FROM ShipmentDetails sd
+      LEFT JOIN Items i ON sd.item_id = i.id
+      WHERE sd.shipment_id = ?
+    `, [req.params.id]);
+
+    res.json({ success: true, data: { ...shipment[0], details } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/shipments', async (req, res) => {
+  try {
+    const { doc_number, doc_date, so_id, partner_id, status, notes, items, transcode_id } = req.body;
+    console.log('Creating Shipment:', req.body);
+
+    await executeQuery(
+      'INSERT INTO Shipments (doc_number, doc_date, so_id, partner_id, status, notes, transcode_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, so_id || null, partner_id, status || 'Draft', notes || null, transcode_id || null]
+    );
+
+    const result = await executeQuery('SELECT * FROM Shipments WHERE doc_number = ?', [doc_number]);
+    const shipmentId = result[0]?.id;
+
+    if (items && items.length > 0 && shipmentId) {
+      for (const item of items) {
+        await executeQuery(
+          'INSERT INTO ShipmentDetails (shipment_id, item_id, quantity, remarks) VALUES (?, ?, ?, ?)',
+          [shipmentId, item.item_id, item.quantity, item.remarks]
+        );
+      }
+    }
+
+    res.json({ success: true, data: result[0], message: 'Shipment berhasil dibuat' });
+
+    // Auto-update SO status
+    if (so_id) await updateSOStatus(so_id);
+
+  } catch (error) {
+    console.error('Error creating shipment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/shipments/:id', async (req, res) => {
+  try {
+    const { doc_number, doc_date, so_id, partner_id, status, notes, items, transcode_id } = req.body;
+
+    await executeQuery(
+      'UPDATE Shipments SET doc_number = ?, doc_date = ?, so_id = ?, partner_id = ?, status = ?, notes = ?, transcode_id = ? WHERE id = ?',
+      [doc_number, doc_date, so_id || null, partner_id, status, notes, transcode_id || null, req.params.id]
+    );
+
+    await executeQuery('DELETE FROM ShipmentDetails WHERE shipment_id = ?', [req.params.id]);
+    if (items && items.length > 0) {
+      for (const item of items) {
+        await executeQuery(
+          'INSERT INTO ShipmentDetails (shipment_id, item_id, quantity, remarks) VALUES (?, ?, ?, ?)',
+          [req.params.id, item.item_id, item.quantity, item.remarks]
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'Shipment berhasil diupdate' });
+
+    // Auto-update SO status
+    if (so_id) await updateSOStatus(so_id);
+
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/shipments/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT status, so_id FROM Shipments WHERE id = ?', [req.params.id]);
+    if (result[0]?.status !== 'Draft') {
+      return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM ShipmentDetails WHERE shipment_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM Shipments WHERE id = ?', [req.params.id]);
+
+    if (result[0]?.so_id) await updateSOStatus(result[0].so_id);
+
+    res.json({ success: true, message: 'Shipment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
 // ==================== SALESPERSONS ====================
 app.get('/api/salespersons', async (req, res) => {
   try {
@@ -990,7 +1119,13 @@ app.get('/api/sales-orders/:id', async (req, res) => {
     `, [req.params.id]);
 
     const details = await executeQuery(`
-      SELECT d.*, i.code as item_code, i.name as item_name
+      SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code,
+      (
+        SELECT COALESCE(SUM(sd.quantity), 0)
+        FROM ShipmentDetails sd
+        JOIN Shipments s ON sd.shipment_id = s.id
+        WHERE s.so_id = d.so_id AND sd.item_id = d.item_id AND s.status != 'Cancelled'
+      ) as qty_shipped
       FROM SalesOrderDetails d
       LEFT JOIN Items i ON d.item_id = i.id
       WHERE d.so_id = ?
@@ -1036,7 +1171,7 @@ app.put('/api/sales-orders/:id', async (req, res) => {
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, salesperson_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
+      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, sales_person_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
       [doc_number, doc_date, partner_id, salesperson_id, status, total, transcode_id, payment_term_id || null, tax_type || 'Exclude', req.params.id]
     );
 
@@ -1591,6 +1726,55 @@ async function updatePOStatus(poId) {
 
   } catch (error) {
     console.error('Error updating PO status:', error);
+  }
+}
+
+async function updateSOStatus(soId) {
+  if (!soId) return;
+
+  try {
+    const soItems = await executeQuery(
+      'SELECT item_id, quantity FROM SalesOrderDetails WHERE so_id = ?',
+      [soId]
+    );
+
+    if (soItems.length === 0) return;
+
+    const shippedItems = await executeQuery(`
+      SELECT sd.item_id, SUM(sd.quantity) as total_shipped
+      FROM ShipmentDetails sd
+      JOIN Shipments s ON sd.shipment_id = s.id
+      WHERE s.so_id = ? AND s.status != 'Cancelled'
+      GROUP BY sd.item_id
+    `, [soId]);
+
+    const shippedMap = {};
+    shippedItems.forEach(item => {
+      shippedMap[item.item_id] = item.total_shipped;
+    });
+
+    let allShipped = true;
+    for (const item of soItems) {
+      const shippedQty = shippedMap[item.item_id] || 0;
+      if (shippedQty < item.quantity) {
+        allShipped = false;
+        break;
+      }
+    }
+
+    const currentSO = await executeQuery('SELECT status FROM SalesOrders WHERE id = ?', [soId]);
+    const currentStatus = currentSO[0]?.status;
+
+    if (allShipped && currentStatus !== 'Closed') {
+      await executeQuery("UPDATE SalesOrders SET status = 'Closed' WHERE id = ?", [soId]);
+      console.log(`SO ${soId} status updated to Closed`);
+    } else if (!allShipped && currentStatus === 'Closed') {
+      await executeQuery("UPDATE SalesOrders SET status = 'Approved' WHERE id = ?", [soId]);
+      console.log(`SO ${soId} status reverted to Approved`);
+    }
+
+  } catch (error) {
+    console.error('Error updating SO status:', error);
   }
 }
 
