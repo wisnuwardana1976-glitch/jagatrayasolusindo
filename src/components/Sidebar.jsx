@@ -53,6 +53,12 @@ const menuItems = [
         ],
     },
     {
+        section: 'Laporan',
+        items: [
+            { id: 'report/po-outstanding', label: 'PO Outstanding', icon: 'file-text' },
+        ],
+    },
+    {
         section: 'Keuangan',
         items: [
             { id: 'cash', label: 'Cash', icon: 'dollar-sign' },
@@ -248,7 +254,7 @@ function Sidebar({ currentPage, setCurrentPage }) {
     }, []);
 
     const loadMenuConfig = () => {
-        const saved = localStorage.getItem('sidebar_menu_config');
+        const saved = localStorage.getItem('sidebar_menu_config_v2');
         if (saved) {
             try {
                 setActiveMenuConfig(JSON.parse(saved));

@@ -54,6 +54,12 @@ const defaultMenuItems = [
         ],
     },
     {
+        section: 'Laporan',
+        items: [
+            { id: 'report/po-outstanding', label: 'PO Outstanding', icon: 'file-text' },
+        ],
+    },
+    {
         section: 'Keuangan',
         items: [
             { id: 'cash', label: 'Cash', icon: 'dollar-sign' },
@@ -73,7 +79,7 @@ function MenuSettings() {
     }, []);
 
     const loadConfig = () => {
-        const saved = localStorage.getItem('sidebar_menu_config');
+        const saved = localStorage.getItem('sidebar_menu_config_v2');
         if (saved) {
             try {
                 setMenuConfig(JSON.parse(saved));
@@ -207,7 +213,7 @@ function MenuSettings() {
     };
 
     const saveConfig = () => {
-        localStorage.setItem('sidebar_menu_config', JSON.stringify(menuConfig));
+        localStorage.setItem('sidebar_menu_config_v2', JSON.stringify(menuConfig));
         setHasChanges(false);
         alert('Konfigurasi menu berhasil disimpan! Refresh halaman untuk melihat perubahan.');
     };
@@ -216,7 +222,7 @@ function MenuSettings() {
         if (!confirm('Apakah Anda yakin ingin mereset ke pengaturan default?')) return;
         const defaultConfig = initializeConfig();
         setMenuConfig(defaultConfig);
-        localStorage.removeItem('sidebar_menu_config');
+        localStorage.removeItem('sidebar_menu_config_v2');
         setHasChanges(false);
         alert('Konfigurasi menu direset ke default.');
     };

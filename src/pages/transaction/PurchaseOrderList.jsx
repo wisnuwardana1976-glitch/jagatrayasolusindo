@@ -440,13 +440,19 @@ function PurchaseOrderList() {
                                                         </select>
                                                     </td>
                                                     <td>
-                                                        <input
-                                                            type="number"
-                                                            min="1"
-                                                            value={detail.quantity}
-                                                            onChange={(e) => updateDetailLine(idx, 'quantity', parseFloat(e.target.value) || 0)}
-                                                            disabled={formData.status === 'Approved'}
-                                                        />
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                            <input
+                                                                type="number"
+                                                                min="1"
+                                                                value={detail.quantity}
+                                                                onChange={(e) => updateDetailLine(idx, 'quantity', parseFloat(e.target.value) || 0)}
+                                                                disabled={formData.status === 'Approved'}
+                                                                style={{ width: '80px' }}
+                                                            />
+                                                            <span style={{ fontSize: '0.85rem', color: '#666' }}>
+                                                                {items.find(i => i.id === parseInt(detail.item_id))?.unit || '-'}
+                                                            </span>
+                                                        </div>
                                                     </td>
                                                     <td>
                                                         <input

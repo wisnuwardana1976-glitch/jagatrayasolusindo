@@ -20,6 +20,7 @@ import SalesOrderList from './pages/transaction/SalesOrderList';
 import ReceivingList from './pages/transaction/ReceivingList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
+import POOutstandingReport from './pages/report/POOutstandingReport';
 import './index.css';
 
 function App() {
@@ -84,6 +85,8 @@ function App() {
                 return <MenuSettings />;
             case 'payment-term':
                 return <PaymentTermList />;
+            case 'report/po-outstanding':
+                return <POOutstandingReport />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

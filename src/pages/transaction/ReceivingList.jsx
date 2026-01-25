@@ -67,8 +67,8 @@ function ReceivingList() {
                 setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 3));
             }
             if (poData.success) {
-                // Filter only Approved POs for selection
-                setPurchaseOrders(poData.data.filter(po => po.status === 'Approved'));
+                // Store all POs, filter in render
+                setPurchaseOrders(poData.data);
             }
 
         } catch (error) {
@@ -106,11 +106,16 @@ function ReceivingList() {
                     po_id: po.id,
                     partner_id: po.partner_id,
                     // Map PO items to Receiving items
-                    items: poDetails.map(d => ({
-                        item_id: d.item_id,
-                        quantity: parseFloat(d.quantity), // Default to full PO qty
-                        remarks: ''
-                    }))
+                    items: poDetails.map(d => {
+                        const ordered = parseFloat(d.quantity);
+                        const received = parseFloat(d.qty_received || 0);
+                        const outstanding = Math.max(0, ordered - received);
+                        return {
+                            item_id: d.item_id,
+                            quantity: outstanding,
+                            remarks: ''
+                        };
+                    })
                 }));
             }
         } catch (error) {
@@ -145,6 +150,7 @@ function ReceivingList() {
     };
 
     const handleEdit = async (id) => {
+        console.log('Edit clicked for ID:', id);
         try {
             const response = await fetch(`/api/receivings/${id}`);
             const data = await response.json();
@@ -167,8 +173,12 @@ function ReceivingList() {
                 });
                 setEditingItem(id);
                 setShowForm(true);
+            } else {
+                console.error('Failed to fetch details:', data.message || data.error);
+                alert('Gagal mengambil detail: ' + (data.message || data.error));
             }
         } catch (error) {
+            console.error('Error in handleEdit:', error);
             alert('Error fetching details: ' + error.message);
         }
     };
@@ -321,9 +331,11 @@ function ReceivingList() {
                                         disabled={!!editingItem || formData.status !== 'Draft'}
                                     >
                                         <option value="">-- Manual (Tanpa PO) --</option>
-                                        {purchaseOrders.map(po => (
-                                            <option key={po.id} value={po.id}>{po.doc_number} - {po.partner_name}</option>
-                                        ))}
+                                        {purchaseOrders
+                                            .filter(po => po.status === 'Approved' || (formData.po_id && po.id === parseInt(formData.po_id)))
+                                            .map(po => (
+                                                <option key={po.id} value={po.id}>{po.doc_number} - {po.partner_name}</option>
+                                            ))}
                                     </select>
                                 </div>
                                 <div className="form-group">
@@ -401,13 +413,19 @@ function ReceivingList() {
                                                         </select>
                                                     </td>
                                                     <td>
-                                                        <input
-                                                            type="number"
-                                                            value={item.quantity}
-                                                            onChange={e => updateItemLine(idx, 'quantity', parseFloat(e.target.value))}
-                                                            min="0"
-                                                            disabled={formData.status !== 'Draft'}
-                                                        />
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                            <input
+                                                                type="number"
+                                                                value={item.quantity}
+                                                                onChange={e => updateItemLine(idx, 'quantity', parseFloat(e.target.value))}
+                                                                min="0"
+                                                                disabled={formData.status !== 'Draft'}
+                                                                style={{ width: '80px' }}
+                                                            />
+                                                            <span style={{ fontSize: '0.85rem', color: '#666' }}>
+                                                                {items.find(i => i.id === parseInt(item.item_id))?.unit || '-'}
+                                                            </span>
+                                                        </div>
                                                     </td>
                                                     <td>
                                                         <input

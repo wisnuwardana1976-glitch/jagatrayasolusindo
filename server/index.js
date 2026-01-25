@@ -818,7 +818,13 @@ app.get('/api/purchase-orders/:id', async (req, res) => {
     `, [req.params.id]);
 
     const details = await executeQuery(`
-      SELECT d.*, i.code as item_code, i.name as item_name
+      SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code,
+      (
+        SELECT COALESCE(SUM(rd.quantity), 0)
+        FROM ReceivingDetails rd
+        JOIN Receivings r ON rd.receiving_id = r.id
+        WHERE r.po_id = d.po_id AND rd.item_id = d.item_id AND r.status != 'Cancelled'
+      ) as qty_received
       FROM PurchaseOrderDetails d
       LEFT JOIN Items i ON d.item_id = i.id
       WHERE d.po_id = ?
@@ -868,6 +874,23 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
+    // Validation: Check if linked to Receiving
+    const hasReceiving = await executeQuery('SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status != "Cancelled"', [req.params.id]);
+    if (hasReceiving[0].count > 0) {
+      // If updating details, block it.
+      // For now, simpler: Block any update except Status change to 'Closed' (which might happen via system)
+      // actually, if user is editing, we should block.
+      // But wait, what if they just want to change Remarks? We don't have remarks in PO update yet? 
+      // Let's safe block critical updates.
+
+      // If the request is trying to update details (which effectively replaces them), block it.
+      // Even header updates like Partner ID should be blocked if received.
+      return res.status(400).json({
+        success: false,
+        message: 'Tidak dapat mengedit PO karena sudah ada dokumen Receiving yang terhubung. Hapus Receiving terlebih dahulu jika ingin mengubah PO.'
+      });
+    }
+
     await executeQuery(
       'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
       [doc_number, doc_date, partner_id, status, total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude', req.params.id]
@@ -892,6 +915,15 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
 
 app.delete('/api/purchase-orders/:id', async (req, res) => {
   try {
+    // Validation: Check if linked to Receiving
+    const hasReceiving = await executeQuery('SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status != "Cancelled"', [req.params.id]);
+    if (hasReceiving[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tidak dapat menghapus PO karena sudah ada dokumen Receiving yang terhubung. Hapus Receiving terlebih dahulu.'
+      });
+    }
+
     await executeQuery('DELETE FROM PurchaseOrderDetails WHERE po_id = ?', [req.params.id]);
     await executeQuery('DELETE FROM PurchaseOrders WHERE id = ?', [req.params.id]);
     res.json({ success: true, message: 'Purchase Order berhasil dihapus' });
@@ -912,6 +944,15 @@ app.put('/api/purchase-orders/:id/approve', async (req, res) => {
 
 app.put('/api/purchase-orders/:id/unapprove', async (req, res) => {
   try {
+    // Validation: Check if linked to Receiving
+    const hasReceiving = await executeQuery('SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status != "Cancelled"', [req.params.id]);
+    if (hasReceiving[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tidak dapat meng-unapprove PO karena sudah ada dokumen Receiving yang terhubung. Hapus Receiving terlebih dahulu.'
+      });
+    }
+
     // Optional: Check if already processed (e.g. received)
     await executeQuery('UPDATE PurchaseOrders SET status = ? WHERE id = ?', ['Draft', req.params.id]);
     res.json({ success: true, message: 'Purchase Order berhasil di-unapprove (Kembali ke Draft)' });
@@ -927,7 +968,7 @@ app.get('/api/sales-orders', async (req, res) => {
       SELECT so.*, p.name as partner_name, p.code as partner_code, sp.name as salesperson_name, t.name as transcode_name
       FROM SalesOrders so
       LEFT JOIN Partners p ON so.partner_id = p.id
-      LEFT JOIN SalesPersons sp ON so.salesperson_id = sp.id
+      LEFT JOIN SalesPersons sp ON so.sales_person_id = sp.id
       LEFT JOIN Transcodes t ON so.transcode_id = t.id
       ORDER BY so.doc_date DESC, so.doc_number DESC
     `);
@@ -943,7 +984,7 @@ app.get('/api/sales-orders/:id', async (req, res) => {
       SELECT so.*, p.name as partner_name, sp.name as salesperson_name, pt.name as payment_term_name
       FROM SalesOrders so
       LEFT JOIN Partners p ON so.partner_id = p.id
-      LEFT JOIN SalesPersons sp ON so.salesperson_id = sp.id
+      LEFT JOIN SalesPersons sp ON so.sales_person_id = sp.id
       LEFT JOIN PaymentTerms pt ON so.payment_term_id = pt.id
       WHERE so.id = ?
     `, [req.params.id]);
@@ -967,7 +1008,7 @@ app.post('/api/sales-orders', async (req, res) => {
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, salesperson_id, status, total_amount, transcode_id, payment_term_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, sales_person_id, status, total_amount, transcode_id, payment_term_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude']
     );
 
@@ -1063,9 +1104,10 @@ app.get('/api/receivings', async (req, res) => {
 });
 
 app.get('/api/receivings/:id', async (req, res) => {
+  console.log('GET /api/receivings/:id hit for ID:', req.params.id);
   try {
     const header = await executeQuery(`
-      SELECT r.*, p.name as partner_name, po.doc_number as po_number, w.name as warehouse_name, l.name as location_name
+      SELECT r.*, p.name as partner_name, po.doc_number as po_number, w.description as warehouse_name, l.name as location_name
       FROM Receivings r
       LEFT JOIN Partners p ON r.partner_id = p.id
       LEFT JOIN PurchaseOrders po ON r.po_id = po.id
@@ -1075,10 +1117,9 @@ app.get('/api/receivings/:id', async (req, res) => {
     `, [req.params.id]);
 
     const details = await executeQuery(`
-      SELECT d.*, i.code as item_code, i.name as item_name, u.code as unit_code
+      SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code
       FROM ReceivingDetails d
       LEFT JOIN Items i ON d.item_id = i.id
-      LEFT JOIN Units u ON i.unit_id = u.id
       WHERE d.receiving_id = ?
     `, [req.params.id]);
 
@@ -1110,6 +1151,9 @@ app.post('/api/receivings', async (req, res) => {
     }
 
     res.json({ success: true, data: result[0], message: 'Receiving berhasil dibuat' });
+
+    // Auto-update PO status
+    if (po_id) await updatePOStatus(po_id);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1135,6 +1179,9 @@ app.put('/api/receivings/:id', async (req, res) => {
     }
 
     res.json({ success: true, message: 'Receiving berhasil diupdate' });
+
+    // Auto-update PO status (using submitted PO ID)
+    if (po_id) await updatePOStatus(po_id);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1142,12 +1189,15 @@ app.put('/api/receivings/:id', async (req, res) => {
 
 app.delete('/api/receivings/:id', async (req, res) => {
   try {
-    const result = await executeQuery('SELECT status FROM Receivings WHERE id = ?', [req.params.id]);
+    const result = await executeQuery('SELECT status, po_id FROM Receivings WHERE id = ?', [req.params.id]);
     if (result[0]?.status !== 'Draft') {
       return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
     }
     await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
     await executeQuery('DELETE FROM Receivings WHERE id = ?', [req.params.id]);
+
+    if (result[0]?.po_id) await updatePOStatus(result[0].po_id);
+
     res.json({ success: true, message: 'Receiving berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1484,6 +1534,102 @@ app.delete('/api/coa-segments/:id', async (req, res) => {
   try {
     await executeQuery('DELETE FROM CoaSegments WHERE id = ?', [req.params.id]);
     res.json({ success: true, message: 'COA Segment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Helper to update PO status
+async function updatePOStatus(poId) {
+  if (!poId) return;
+
+  try {
+    // 1. Get all PO items and their ordered quantities
+    const poItems = await executeQuery(
+      'SELECT item_id, quantity FROM PurchaseOrderDetails WHERE po_id = ?',
+      [poId]
+    );
+
+    if (poItems.length === 0) return;
+
+    // 2. Get total received quantities for this PO
+    const receivedItems = await executeQuery(`
+      SELECT rd.item_id, SUM(rd.quantity) as total_received
+      FROM ReceivingDetails rd
+      JOIN Receivings r ON rd.receiving_id = r.id
+      WHERE r.po_id = ? AND r.status != 'Cancelled'
+      GROUP BY rd.item_id
+    `, [poId]);
+
+    // Map received quantities for easy lookup
+    const receivedMap = {};
+    receivedItems.forEach(item => {
+      receivedMap[item.item_id] = item.total_received;
+    });
+
+    // 3. Check if all items are fully received
+    let allReceived = true;
+    for (const item of poItems) {
+      const receivedQty = receivedMap[item.item_id] || 0;
+      if (receivedQty < item.quantity) {
+        allReceived = false;
+        break;
+      }
+    }
+
+    // 4. Update PO status
+    const currentPO = await executeQuery('SELECT status FROM PurchaseOrders WHERE id = ?', [poId]);
+    const currentStatus = currentPO[0]?.status;
+
+    if (allReceived && currentStatus !== 'Closed') {
+      await executeQuery("UPDATE PurchaseOrders SET status = 'Closed' WHERE id = ?", [poId]);
+      console.log(`PO ${poId} status updated to Closed`);
+    } else if (!allReceived && currentStatus === 'Closed') {
+      await executeQuery("UPDATE PurchaseOrders SET status = 'Approved' WHERE id = ?", [poId]);
+      console.log(`PO ${poId} status reverted to Approved`);
+    }
+
+  } catch (error) {
+    console.error('Error updating PO status:', error);
+  }
+}
+
+// ==================== REPORTS ====================
+app.get('/api/reports/po-outstanding', async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        po.id as po_id,
+        po.doc_number,
+        po.doc_date,
+        p.name as partner_name,
+        i.code as item_code,
+        i.name as item_name,
+        i.unit,
+        pod.quantity as qty_ordered,
+        (
+          SELECT COALESCE(SUM(rd.quantity), 0)
+          FROM ReceivingDetails rd
+          JOIN Receivings r ON rd.receiving_id = r.id
+          WHERE r.po_id = po.id AND rd.item_id = pod.item_id AND r.status != 'Cancelled'
+        ) as qty_received
+      FROM PurchaseOrderDetails pod
+      JOIN PurchaseOrders po ON pod.po_id = po.id
+      JOIN Items i ON pod.item_id = i.id
+      LEFT JOIN Partners p ON po.partner_id = p.id
+      WHERE po.status = 'Approved'
+      ORDER BY po.doc_date ASC, po.doc_number ASC
+    `;
+
+    const results = await executeQuery(query);
+
+    // Filter outstanding > 0
+    const outstandingItems = results.filter(item => item.qty_ordered > item.qty_received).map(item => ({
+      ...item,
+      qty_outstanding: item.qty_ordered - item.qty_received
+    }));
+
+    res.json({ success: true, data: outstandingItems });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
