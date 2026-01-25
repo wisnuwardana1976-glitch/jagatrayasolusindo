@@ -556,6 +556,27 @@ app.put('/api/shipments/:id', async (req, res) => {
     if (so_id) await updateSOStatus(so_id);
 
   } catch (error) {
+    console.error('Error updating shipment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/shipments/:id/approve', async (req, res) => {
+  try {
+    await executeQuery('UPDATE Shipments SET status = ? WHERE id = ?', ['Approved', req.params.id]);
+    res.json({ success: true, message: 'Shipment berhasil di-approve' });
+  } catch (error) {
+    console.error('Error approving shipment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/shipments/:id/unapprove', async (req, res) => {
+  try {
+    await executeQuery('UPDATE Shipments SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    res.json({ success: true, message: 'Shipment berhasil di-unapprove (Kembali ke Draft)' });
+  } catch (error) {
+    console.error('Error unapproving shipment:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1358,15 +1379,16 @@ app.put('/api/receivings/:id/unapprove', async (req, res) => {
   }
 });
 
-// ==================== SHIPMENTS ====================
-app.get('/api/shipments', async (req, res) => {
+
+// ==================== AP INVOICES ====================
+app.get('/api/ap-invoices', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT s.*, p.name as partner_name, so.doc_number as so_number
-      FROM Shipments s
-      LEFT JOIN Partners p ON s.partner_id = p.id
-      LEFT JOIN SalesOrders so ON s.so_id = so.id
-      ORDER BY s.doc_date DESC
+      SELECT ap.*, p.name as partner_name, t.name as transcode_name
+      FROM APInvoices ap
+      LEFT JOIN Partners p ON ap.partner_id = p.id
+      LEFT JOIN Transcodes t ON ap.transcode_id = t.id
+      ORDER BY ap.doc_date DESC, ap.doc_number DESC
     `);
     res.json({ success: true, data: result });
   } catch (error) {
@@ -1374,34 +1396,115 @@ app.get('/api/shipments', async (req, res) => {
   }
 });
 
-app.post('/api/shipments', async (req, res) => {
+app.get('/api/ap-invoices/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, so_id, partner_id, status, details } = req.body;
+    const header = await executeQuery(`
+      SELECT ap.*, p.name as partner_name
+      FROM APInvoices ap
+      LEFT JOIN Partners p ON ap.partner_id = p.id
+      WHERE ap.id = ?
+    `, [req.params.id]);
 
-    await executeQuery(
-      'INSERT INTO Shipments (doc_number, doc_date, so_id, partner_id, status) VALUES (?, ?, ?, ?, ?)',
-      [doc_number, doc_date, so_id, partner_id, status || 'Draft']
-    );
+    const details = await executeQuery(`
+      SELECT d.*, i.code as item_code, i.name as item_name
+      FROM APInvoiceDetails d
+      LEFT JOIN Items i ON d.item_id = i.id
+      WHERE d.ap_invoice_id = ?
+    `, [req.params.id]);
 
-    const result = await executeQuery('SELECT * FROM Shipments WHERE doc_number = ?', [doc_number]);
-    const shipId = result[0]?.id;
-
-    if (details && details.length > 0 && shipId) {
-      for (const d of details) {
-        await executeQuery(
-          'INSERT INTO ShipmentDetails (shipment_id, item_id, quantity) VALUES (?, ?, ?)',
-          [shipId, d.item_id, d.quantity]
-        );
-      }
-    }
-
-    res.json({ success: true, data: result[0], message: 'Shipment berhasil dibuat' });
+    res.json({ success: true, data: { ...header[0], details } });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ==================== AR INVOICES ====================
+app.post('/api/ap-invoices', async (req, res) => {
+  try {
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, items } = req.body;
+
+    await executeQuery(
+      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null]
+    );
+
+    const result = await executeQuery('SELECT * FROM APInvoices WHERE doc_number = ?', [doc_number]);
+    const apId = result[0]?.id;
+
+    if (items && items.length > 0 && apId) {
+      for (const d of items) {
+        await executeQuery(
+          'INSERT INTO APInvoiceDetails (ap_invoice_id, item_id, description, quantity, unit_price, amount, receiving_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [apId, d.item_id || null, d.description || '', d.quantity || 0, d.unit_price || 0, d.amount || 0, d.receiving_id || null]
+        );
+      }
+    }
+
+    res.json({ success: true, data: result[0], message: 'AP Invoice berhasil dibuat' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/ap-invoices/:id', async (req, res) => {
+  try {
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, items } = req.body;
+
+    await executeQuery(
+      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, req.params.id]
+    );
+
+    await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [req.params.id]);
+
+    if (items && items.length > 0) {
+      for (const d of items) {
+        await executeQuery(
+          'INSERT INTO APInvoiceDetails (ap_invoice_id, item_id, description, quantity, unit_price, amount, receiving_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, d.item_id || null, d.description || '', d.quantity || 0, d.unit_price || 0, d.amount || 0, d.receiving_id || null]
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'AP Invoice berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/ap-invoices/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT status FROM APInvoices WHERE id = ?', [req.params.id]);
+    if (result[0]?.status !== 'Draft') {
+      return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM APInvoices WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'AP Invoice berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/ap-invoices/:id/post', async (req, res) => {
+  try {
+    await executeQuery('UPDATE APInvoices SET status = ? WHERE id = ?', ['Posted', req.params.id]);
+    // In future: Add Journal Entries here
+    res.json({ success: true, message: 'AP Invoice berhasil di-post' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/ap-invoices/:id/unpost', async (req, res) => {
+  try {
+    await executeQuery('UPDATE APInvoices SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    // In future: Reverse Journal Entries
+    res.json({ success: true, message: 'AP Invoice berhasil di-unpost (Kembali ke Draft)' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.get('/api/ar-invoices', async (req, res) => {
   try {
     const result = await executeQuery(`

@@ -1,24 +1,25 @@
 import { useState, useEffect } from 'react';
 
-function ShipmentList() {
-    const [shipments, setShipments] = useState([]);
+function APInvoiceList() {
+    const [invoices, setInvoices] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editingItem, setEditingItem] = useState(null);
-    const [salesOrders, setSalesOrders] = useState([]);
-    const [customers, setCustomers] = useState([]);
+    const [suppliers, setSuppliers] = useState([]);
+    const [receivings, setReceivings] = useState([]);
     const [items, setItems] = useState([]);
-    const [transcodes, setTranscodes] = useState([]); // Add transcode state
+    const [transcodes, setTranscodes] = useState([]);
 
-    // "sourceType": 'so' | 'manual'
-    const [sourceType, setSourceType] = useState('so');
+    // "sourceType": 'receiving' | 'manual'
+    const [sourceType, setSourceType] = useState('receiving');
 
     const [formData, setFormData] = useState({
         doc_number: '',
         doc_date: new Date().toISOString().split('T')[0],
+        due_date: new Date().toISOString().split('T')[0],
         transcode_id: '',
-        so_id: '',
         partner_id: '',
+        receiving_id: '',
         status: 'Draft',
         notes: '',
         items: []
@@ -32,10 +33,10 @@ function ShipmentList() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/shipments');
+            const response = await fetch('/api/ap-invoices');
             const data = await response.json();
             if (data.success) {
-                setShipments(data.data);
+                setInvoices(data.data);
             }
         } catch (error) {
             console.error('Error:', error);
@@ -45,50 +46,38 @@ function ShipmentList() {
 
     const fetchMasterData = async () => {
         try {
-            const [soRes, custRes, itemRes, transRes] = await Promise.all([
-                fetch('/api/sales-orders'),
-                fetch('/api/partners?type=Customer'),
+            const [supRes, recRes, itemRes, transRes] = await Promise.all([
+                fetch('/api/partners?type=Supplier'),
+                fetch('/api/receivings'),
                 fetch('/api/items'),
                 fetch('/api/transcodes')
             ]);
-            const soData = await soRes.json();
-            const custData = await custRes.json();
+            const supData = await supRes.json();
+            const recData = await recRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
 
-            if (soData.success) {
-                setSalesOrders(soData.data);
+            if (supData.success) setSuppliers(supData.data);
+            if (recData.success) {
+                // Only show Approved receivings for selection
+                setReceivings(recData.data.filter(r => r.status === 'Approved'));
             }
-            if (custData.success) setCustomers(custData.data);
             if (itemData.success) setItems(itemData.data);
             if (transData.success) {
-                // Filter for Shipment transcode (nomortranscode = 4)
-                setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 4));
+                // Filter for AP Invoice transcode (adjust criteria as needed, assuming nomortranscode 5 for AP)
+                // For now just show all or filter if you know the code
+                setTranscodes(transData.data.filter(t => t.active === 'Y'));
             }
         } catch (error) {
             console.error('Error:', error);
         }
     };
 
-    const generateNumber = async (code) => {
-        try {
-            const response = await fetch(`/api/transcodes/${code}/generate`);
-            const data = await response.json();
-            if (data.success) {
-                setFormData(prev => ({ ...prev, doc_number: data.doc_number }));
-            } else {
-                alert('Gagal generate nomor dokumen: ' + data.error);
-            }
-        } catch (error) {
-            console.error('Error generating number:', error);
-        }
-    };
-
-    const handleSelectSO = async (soId) => {
-        if (!soId) {
+    const handleSelectReceiving = async (recId) => {
+        if (!recId) {
             setFormData(prev => ({
                 ...prev,
-                so_id: '',
+                receiving_id: '',
                 partner_id: '',
                 items: []
             }));
@@ -96,43 +85,50 @@ function ShipmentList() {
         }
 
         try {
-            const response = await fetch(`/api/sales-orders/${soId}`);
+            const response = await fetch(`/api/receivings/${recId}`);
             const data = await response.json();
             if (data.success) {
-                const so = data.data;
-                const soDetails = so.details || [];
+                const rec = data.data;
+                const recDetails = rec.details || [];
 
                 setFormData(prev => ({
                     ...prev,
-                    so_id: so.id,
-                    partner_id: so.partner_id,
-                    items: soDetails.map(d => {
-                        const ordered = parseFloat(d.quantity);
-                        const shipped = parseFloat(d.qty_shipped || 0);
-                        const outstanding = Math.max(0, ordered - shipped);
-                        return {
-                            item_id: d.item_id,
-                            quantity: outstanding,
-                            remarks: ''
-                        };
-                    })
+                    receiving_id: rec.id,
+                    partner_id: rec.partner_id,
+                    items: recDetails.map(d => ({
+                        item_id: d.item_id,
+                        description: d.item_name || '', // Use item name or remarks
+                        quantity: parseFloat(d.quantity),
+                        unit_price: 0, // Price to be filled by user
+                        amount: 0,
+                        receiving_id: rec.id
+                    }))
                 }));
             }
         } catch (error) {
-            console.error('Error fetching SO details:', error);
+            console.error('Error fetching Receiving details:', error);
         }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const url = editingItem ? `/api/shipments/${editingItem}` : '/api/shipments';
+            const MyDate = new Date();
+            const url = editingItem ? `/api/ap-invoices/${editingItem}` : '/api/ap-invoices';
             const method = editingItem ? 'PUT' : 'POST';
+
+            const payload = {
+                ...formData,
+                items: formData.items.map(item => ({
+                    ...item,
+                    amount: parseFloat(item.quantity) * parseFloat(item.unit_price)
+                }))
+            };
 
             const response = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
+                body: JSON.stringify(payload)
             });
 
             const data = await response.json();
@@ -151,28 +147,30 @@ function ShipmentList() {
 
     const handleEdit = async (id) => {
         try {
-            const response = await fetch(`/api/shipments/${id}`);
+            const response = await fetch(`/api/ap-invoices/${id}`);
             const data = await response.json();
             if (data.success) {
-                const ship = data.data;
+                const inv = data.data;
                 setFormData({
-                    doc_number: ship.doc_number,
-                    doc_date: new Date(ship.doc_date).toISOString().split('T')[0],
-                    transcode_id: ship.transcode_id || '',
-                    so_id: ship.so_id || '',
-                    partner_id: ship.partner_id || '',
-                    status: ship.status,
-                    notes: ship.notes || '',
-                    items: ship.details.map(d => ({
+                    doc_number: inv.doc_number,
+                    doc_date: new Date(inv.doc_date).toISOString().split('T')[0],
+                    due_date: inv.due_date ? new Date(inv.due_date).toISOString().split('T')[0] : '',
+                    transcode_id: inv.transcode_id || '',
+                    partner_id: inv.partner_id || '',
+                    receiving_id: '', // Reset receiving if editing manually, or logic to fetch if stored
+                    status: inv.status,
+                    notes: inv.notes || '',
+                    items: inv.details.map(d => ({
                         item_id: d.item_id,
+                        description: d.description,
                         quantity: parseFloat(d.quantity),
-                        remarks: d.remarks || ''
+                        unit_price: parseFloat(d.unit_price),
+                        amount: parseFloat(d.amount),
+                        receiving_id: d.receiving_id
                     }))
                 });
 
-                // Determine source type
-                setSourceType(ship.so_id ? 'so' : 'manual');
-
+                setSourceType('manual'); // Default to manual on edit for now
                 setEditingItem(id);
                 setShowForm(true);
             }
@@ -182,9 +180,9 @@ function ShipmentList() {
     };
 
     const handleDelete = async (id) => {
-        if (!confirm('Yakin ingin menghapus Shipment ini?')) return;
+        if (!confirm('Yakin ingin menghapus Invoice ini?')) return;
         try {
-            const response = await fetch(`/api/shipments/${id}`, { method: 'DELETE' });
+            const response = await fetch(`/api/ap-invoices/${id}`, { method: 'DELETE' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -197,10 +195,10 @@ function ShipmentList() {
         }
     };
 
-    const handleApprove = async (id) => {
-        if (!confirm('Approve Shipment ini? Stok akan berkurang.')) return;
+    const handlePost = async (id) => {
+        if (!confirm('Post Invoice ini?')) return;
         try {
-            const response = await fetch(`/api/shipments/${id}/approve`, { method: 'PUT' });
+            const response = await fetch(`/api/ap-invoices/${id}/post`, { method: 'PUT' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -213,10 +211,10 @@ function ShipmentList() {
         }
     };
 
-    const handleUnapprove = async (id) => {
-        if (!confirm('Unapprove Shipment ini? Status kembali ke Draft.')) return;
+    const handleUnpost = async (id) => {
+        if (!confirm('Unpost Invoice ini? Status kembali ke Draft.')) return;
         try {
-            const response = await fetch(`/api/shipments/${id}/unapprove`, { method: 'PUT' });
+            const response = await fetch(`/api/ap-invoices/${id}/unpost`, { method: 'PUT' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -232,7 +230,7 @@ function ShipmentList() {
     const handleAddItem = () => {
         setFormData(prev => ({
             ...prev,
-            items: [...prev.items, { item_id: '', quantity: 1, remarks: '' }]
+            items: [...prev.items, { item_id: '', description: '', quantity: 1, unit_price: 0, amount: 0 }]
         }));
     };
 
@@ -246,18 +244,24 @@ function ShipmentList() {
     const handleItemChange = (index, field, value) => {
         const newItems = [...formData.items];
         newItems[index][field] = value;
+        // Auto-calculate description if item selected
+        if (field === 'item_id') {
+            const item = items.find(i => i.id === parseInt(value));
+            if (item) newItems[index].description = item.name;
+        }
         setFormData({ ...formData, items: newItems });
     };
 
     const resetForm = () => {
         setEditingItem(null);
-        setSourceType('so');
+        setSourceType('receiving');
         setFormData({
-            doc_number: '', // Let user generate
+            doc_number: 'AUTO',
             doc_date: new Date().toISOString().split('T')[0],
+            due_date: new Date().toISOString().split('T')[0],
             transcode_id: '',
-            so_id: '',
             partner_id: '',
+            receiving_id: '',
             status: 'Draft',
             notes: '',
             items: []
@@ -268,12 +272,16 @@ function ShipmentList() {
         return new Date(date).toLocaleDateString('id-ID');
     };
 
+    const formatMoney = (amount) => {
+        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
+    };
+
     return (
         <div>
             <div className="page-header">
-                <h1 className="page-title">Shipment / Pengiriman</h1>
+                <h1 className="page-title">AP Invoice / Tagihan Pembelian</h1>
                 <button className="btn btn-primary" onClick={() => { resetForm(); setShowForm(true); }}>
-                    + Buat Shipment Baru
+                    + Buat Invoice Baru
                 </button>
             </div>
 
@@ -282,33 +290,11 @@ function ShipmentList() {
                 <div className="modal-overlay">
                     <div className="modal modal-large">
                         <div className="modal-header">
-                            <h3>{editingItem ? 'Edit Shipment' : 'Buat Shipment Baru'}</h3>
+                            <h3>{editingItem ? 'Edit Invoice' : 'Buat Invoice Baru'}</h3>
                             <button className="modal-close" onClick={() => setShowForm(false)}>×</button>
                         </div>
                         <form onSubmit={handleSubmit}>
                             <div className="form-row">
-                                <div className="form-group">
-                                    <label>Tipe Transaksi</label>
-                                    <select
-                                        value={formData.transcode_id}
-                                        onChange={(e) => {
-                                            const selectedId = parseInt(e.target.value);
-                                            const selectedTranscode = transcodes.find(t => t.id === selectedId);
-                                            setFormData({ ...formData, transcode_id: selectedId });
-                                            if (selectedTranscode && !editingItem) {
-                                                generateNumber(selectedTranscode.code);
-                                            }
-                                        }}
-                                        required
-                                        required
-                                        disabled={editingItem || formData.status !== 'Draft'}
-                                    >
-                                        <option value="">-- Pilih Tipe --</option>
-                                        {transcodes.map(tc => (
-                                            <option key={tc.id} value={tc.id}>{tc.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
                                 <div className="form-group">
                                     <label>No. Dokumen</label>
                                     <input
@@ -316,17 +302,26 @@ function ShipmentList() {
                                         value={formData.doc_number}
                                         onChange={(e) => setFormData({ ...formData, doc_number: e.target.value })}
                                         required
-                                        readOnly // Typically auto-generated
                                         placeholder="Otomatis"
                                     />
                                 </div>
                                 <div className="form-group">
-                                    <label>Tanggal</label>
+                                    <label>Tanggal Invoice</label>
                                     <input
                                         type="date"
                                         value={formData.doc_date}
                                         onChange={(e) => setFormData({ ...formData, doc_date: e.target.value })}
                                         required
+                                        disabled={formData.status !== 'Draft'}
+                                    />
+                                </div>
+                                <div className="form-group">
+                                    <label>Jatuh Tempo</label>
+                                    <input
+                                        type="date"
+                                        value={formData.due_date}
+                                        onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
                                     />
                                 </div>
                             </div>
@@ -339,14 +334,14 @@ function ShipmentList() {
                                             <input
                                                 type="radio"
                                                 name="sourceType"
-                                                checked={sourceType === 'so'}
+                                                checked={sourceType === 'receiving'}
                                                 onChange={() => {
-                                                    setSourceType('so');
-                                                    setFormData(prev => ({ ...prev, so_id: '', items: [] }));
+                                                    setSourceType('receiving');
+                                                    setFormData(prev => ({ ...prev, receiving_id: '', items: [] }));
                                                 }}
                                                 disabled={editingItem || formData.status !== 'Draft'}
                                             />
-                                            <span style={{ marginLeft: '5px' }}>Dari Sales Order</span>
+                                            <span style={{ marginLeft: '5px' }}>Dari Receiving</span>
                                         </label>
                                         <label style={{ display: 'inline-flex', alignItems: 'center' }}>
                                             <input
@@ -355,52 +350,52 @@ function ShipmentList() {
                                                 checked={sourceType === 'manual'}
                                                 onChange={() => {
                                                     setSourceType('manual');
-                                                    setFormData(prev => ({ ...prev, so_id: '', items: [] }));
+                                                    setFormData(prev => ({ ...prev, receiving_id: '', items: [] }));
                                                 }}
                                                 disabled={editingItem || formData.status !== 'Draft'}
                                             />
-                                            <span style={{ marginLeft: '5px' }}>Input Manual (Tanpa SO)</span>
+                                            <span style={{ marginLeft: '5px' }}>Input Manual</span>
                                         </label>
                                     </div>
                                 </div>
                             </div>
 
                             <div className="form-row">
-                                {sourceType === 'so' && (
+                                {sourceType === 'receiving' && (
                                     <div className="form-group">
-                                        <label>Sales Order</label>
+                                        <label>Receiving (Approved)</label>
                                         <select
-                                            value={formData.so_id}
-                                            onChange={(e) => handleSelectSO(e.target.value)}
+                                            value={formData.receiving_id}
+                                            onChange={(e) => handleSelectReceiving(e.target.value)}
                                             disabled={editingItem || formData.status !== 'Draft'}
                                         >
-                                            <option value="">-- Pilih Sales Order --</option>
-                                            {salesOrders.filter(so => !editingItem ? so.status === 'Approved' : true).map(so => (
-                                                <option key={so.id} value={so.id}>
-                                                    {so.doc_number} - {so.customer_name || 'No Name'}
+                                            <option value="">-- Pilih Receiving --</option>
+                                            {receivings.map(rec => (
+                                                <option key={rec.id} value={rec.id}>
+                                                    {rec.doc_number} - {rec.partner_name}
                                                 </option>
                                             ))}
                                         </select>
                                     </div>
                                 )}
                                 <div className="form-group">
-                                    <label>Customer</label>
+                                    <label>Supplier</label>
                                     <select
                                         value={formData.partner_id}
                                         onChange={(e) => setFormData({ ...formData, partner_id: e.target.value })}
                                         required
-                                        disabled={formData.so_id || formData.status !== 'Draft'}
+                                        disabled={formData.receiving_id || formData.status !== 'Draft'}
                                     >
-                                        <option value="">-- Pilih Customer --</option>
-                                        {customers.map(c => (
-                                            <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
+                                        <option value="">-- Pilih Supplier --</option>
+                                        {suppliers.map(s => (
+                                            <option key={s.id} value={s.id}>{s.code} - {s.name}</option>
                                         ))}
                                     </select>
                                 </div>
                             </div>
 
                             <div className="form-group">
-                                <label>Keterangan / Alamat Kirim</label>
+                                <label>Keterangan</label>
                                 <textarea
                                     value={formData.notes}
                                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
@@ -411,23 +406,25 @@ function ShipmentList() {
 
                             <div className="form-section">
                                 <div className="form-section-header">
-                                    <h4>Daftar Barang</h4>
-                                    <button type="button" className="btn btn-outline" onClick={handleAddItem} disabled={(sourceType === 'so' && !formData.so_id) || formData.status !== 'Draft'}>+ Tambah Manual</button>
+                                    <h4>Daftar Tagihan</h4>
+                                    <button type="button" className="btn btn-outline" onClick={handleAddItem} disabled={formData.status !== 'Draft'}>+ Tambah Item/Jasa</button>
                                 </div>
                                 <table className="data-table">
                                     <thead>
                                         <tr>
-                                            <th>Item</th>
-                                            <th style={{ width: '100px' }}>Qty Kirim</th>
-                                            <th>Keterangan</th>
+                                            <th>Item (Opsional)</th>
+                                            <th>Deskripsi</th>
+                                            <th style={{ width: '80px' }}>Qty</th>
+                                            <th style={{ width: '120px' }}>Harga Satuan</th>
+                                            <th style={{ width: '120px' }}>Total</th>
                                             <th style={{ width: '50px' }}></th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {formData.items.length === 0 ? (
                                             <tr>
-                                                <td colSpan="4" style={{ textAlign: 'center', padding: '1rem', color: '#888' }}>
-                                                    {sourceType === 'so' && !formData.so_id ? 'Pilih SO terlebih dahulu.' : 'Belum ada barang.'}
+                                                <td colSpan="6" style={{ textAlign: 'center', padding: '1rem', color: '#888' }}>
+                                                    {sourceType === 'receiving' && !formData.receiving_id ? 'Pilih Receiving terlebih dahulu.' : 'Belum ada item.'}
                                                 </td>
                                             </tr>
                                         ) : (
@@ -437,41 +434,50 @@ function ShipmentList() {
                                                         <select
                                                             value={item.item_id}
                                                             onChange={(e) => handleItemChange(idx, 'item_id', e.target.value)}
-                                                            required
-                                                            disabled={formData.so_id || formData.status !== 'Draft'}
                                                             style={{ width: '100%' }}
+                                                            disabled={formData.receiving_id || formData.status !== 'Draft'}
                                                         >
-                                                            <option value="">-- Pilih Item --</option>
+                                                            <option value="">-- Non-Inventory --</option>
                                                             {items.map(i => (
                                                                 <option key={i.id} value={i.id}>{i.code} - {i.name}</option>
                                                             ))}
                                                         </select>
                                                     </td>
                                                     <td>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="any"
-                                                                value={item.quantity}
-                                                                onChange={(e) => handleItemChange(idx, 'quantity', parseFloat(e.target.value) || 0)}
-                                                                required
-                                                                style={{ width: '80px' }}
-                                                                disabled={formData.status !== 'Draft'}
-                                                            />
-                                                            <span style={{ fontSize: '0.85rem', color: '#666' }}>
-                                                                {items.find(i => i.id === parseInt(item.item_id))?.unit || ''}
-                                                            </span>
-                                                        </div>
+                                                        <input
+                                                            type="text"
+                                                            value={item.description}
+                                                            onChange={(e) => handleItemChange(idx, 'description', e.target.value)}
+                                                            required
+                                                            disabled={formData.status !== 'Draft'}
+                                                        />
                                                     </td>
                                                     <td>
                                                         <input
-                                                            type="text"
-                                                            value={item.remarks}
-                                                            onChange={(e) => handleItemChange(idx, 'remarks', e.target.value)}
-                                                            placeholder="Catatan..."
+                                                            type="number"
+                                                            min="0"
+                                                            step="any"
+                                                            value={item.quantity}
+                                                            onChange={(e) => handleItemChange(idx, 'quantity', parseFloat(e.target.value) || 0)}
+                                                            required
+                                                            style={{ width: '100%' }}
                                                             disabled={formData.status !== 'Draft'}
                                                         />
+                                                    </td>
+                                                    <td>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="any"
+                                                            value={item.unit_price}
+                                                            onChange={(e) => handleItemChange(idx, 'unit_price', parseFloat(e.target.value) || 0)}
+                                                            required
+                                                            style={{ width: '100%' }}
+                                                            disabled={formData.status !== 'Draft'}
+                                                        />
+                                                    </td>
+                                                    <td>
+                                                        {formatMoney((item.quantity || 0) * (item.unit_price || 0))}
                                                     </td>
                                                     <td>
                                                         <button type="button" className="btn-icon" onClick={() => handleRemoveItem(idx)} disabled={formData.status !== 'Draft'}>🗑️</button>
@@ -480,6 +486,15 @@ function ShipmentList() {
                                             ))
                                         )}
                                     </tbody>
+                                    <tfoot>
+                                        <tr>
+                                            <td colSpan="4" style={{ textAlign: 'right', fontWeight: 'bold' }}>Total Tagihan:</td>
+                                            <td style={{ fontWeight: 'bold' }}>
+                                                {formatMoney(formData.items.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0))}
+                                            </td>
+                                            <td></td>
+                                        </tr>
+                                    </tfoot>
                                 </table>
                             </div>
 
@@ -488,7 +503,7 @@ function ShipmentList() {
                                     {formData.status !== 'Draft' ? 'Tutup' : 'Batal'}
                                 </button>
                                 {formData.status === 'Draft' && (
-                                    <button type="submit" className="btn btn-primary">{editingItem ? 'Update Shipment' : 'Simpan Shipment'}</button>
+                                    <button type="submit" className="btn btn-primary">{editingItem ? 'Update Invoice' : 'Simpan Invoice'}</button>
                                 )}
                             </div>
                         </form>
@@ -506,40 +521,40 @@ function ShipmentList() {
                             <tr>
                                 <th>Tanggal</th>
                                 <th>No. Dokumen</th>
-                                <th>Customer</th>
-                                <th>Dari SO</th>
+                                <th>jth Tempo</th>
+                                <th>Supplier</th>
                                 <th>Status</th>
                                 <th style={{ textAlign: 'center' }}>Aksi</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {shipments.length === 0 ? (
+                            {invoices.length === 0 ? (
                                 <tr>
-                                    <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>Belum ada data Shipment</td>
+                                    <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>Belum ada AP Invoice</td>
                                 </tr>
                             ) : (
-                                shipments.map(s => (
-                                    <tr key={s.id}>
-                                        <td>{formatDate(s.doc_date)}</td>
-                                        <td><strong>{s.doc_number}</strong></td>
-                                        <td>{s.customer_name || '-'}</td>
-                                        <td>{s.so_number || '-'}</td>
+                                invoices.map(inv => (
+                                    <tr key={inv.id}>
+                                        <td>{formatDate(inv.doc_date)}</td>
+                                        <td><strong>{inv.doc_number}</strong></td>
+                                        <td>{inv.due_date ? formatDate(inv.due_date) : '-'}</td>
+                                        <td>{inv.partner_name || '-'}</td>
                                         <td>
-                                            <span className={`badge ${s.status === 'Draft' ? 'badge-warning' : 'badge-success'}`}>
-                                                {s.status}
+                                            <span className={`badge ${inv.status === 'Draft' ? 'badge-warning' : 'badge-success'}`}>
+                                                {inv.status}
                                             </span>
                                         </td>
                                         <td style={{ textAlign: 'center' }}>
-                                            {s.status === 'Draft' ? (
+                                            {inv.status === 'Draft' ? (
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleApprove(s.id)} title="Approve" style={{ color: 'green', marginRight: '5px' }}>✅</button>
-                                                    <button className="btn-icon" onClick={() => handleEdit(s.id)} title="Edit" style={{ marginRight: '5px' }}>✏️</button>
-                                                    <button className="btn-icon" onClick={() => handleDelete(s.id)} title="Hapus">🗑️</button>
+                                                    <button className="btn-icon" onClick={() => handlePost(inv.id)} title="Post" style={{ color: 'green', marginRight: '5px' }}>✅</button>
+                                                    <button className="btn-icon" onClick={() => handleEdit(inv.id)} title="Edit" style={{ marginRight: '5px' }}>✏️</button>
+                                                    <button className="btn-icon" onClick={() => handleDelete(inv.id)} title="Hapus">🗑️</button>
                                                 </>
                                             ) : (
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleUnapprove(s.id)} title="Unapprove" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
-                                                    <button className="btn-icon" onClick={() => handleEdit(s.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
+                                                    <button className="btn-icon" onClick={() => handleUnpost(inv.id)} title="Unpost" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
+                                                    <button className="btn-icon" onClick={() => handleEdit(inv.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
                                                 </>
                                             )}
                                         </td>
@@ -554,4 +569,4 @@ function ShipmentList() {
     );
 }
 
-export default ShipmentList;
+export default APInvoiceList;
