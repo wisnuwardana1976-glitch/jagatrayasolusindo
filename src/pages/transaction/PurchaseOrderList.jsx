@@ -587,7 +587,20 @@ function PurchaseOrderList() {
                                                 </>
                                             ) : (
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleUnapprove(order.id)} title="Unapprove" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
+                                                    <button
+                                                        className="btn-icon"
+                                                        onClick={() => order.status !== 'Closed' && handleUnapprove(order.id)}
+                                                        title={order.status === 'Closed' ? "Closed - Cannot Unapprove" : "Unapprove"}
+                                                        style={{
+                                                            color: 'orange',
+                                                            marginRight: '5px',
+                                                            opacity: order.status === 'Closed' ? 0.3 : 1,
+                                                            cursor: order.status === 'Closed' ? 'not-allowed' : 'pointer'
+                                                        }}
+                                                        disabled={order.status === 'Closed'}
+                                                    >
+                                                        🔓
+                                                    </button>
                                                     <button className="btn-icon" onClick={() => handleEdit(order.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
                                                 </>
                                             )}

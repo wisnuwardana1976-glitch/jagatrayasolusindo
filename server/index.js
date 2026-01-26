@@ -475,28 +475,7 @@ app.get('/api/shipments', async (req, res) => {
   }
 });
 
-app.get('/api/shipments/:id', async (req, res) => {
-  try {
-    const shipment = await executeQuery(`
-      SELECT s.*, p.name as customer_name, so.doc_number as so_number
-      FROM Shipments s
-      LEFT JOIN Partners p ON s.partner_id = p.id
-      LEFT JOIN SalesOrders so ON s.so_id = so.id
-      WHERE s.id = ?
-    `, [req.params.id]);
 
-    const details = await executeQuery(`
-      SELECT sd.*, i.code as item_code, i.name as item_name, i.unit as unit_code
-      FROM ShipmentDetails sd
-      LEFT JOIN Items i ON sd.item_id = i.id
-      WHERE sd.shipment_id = ?
-    `, [req.params.id]);
-
-    res.json({ success: true, data: { ...shipment[0], details } });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
 
 app.post('/api/shipments', async (req, res) => {
   try {
@@ -1273,9 +1252,14 @@ app.get('/api/receivings/:id', async (req, res) => {
     `, [req.params.id]);
 
     const details = await executeQuery(`
-      SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code
+      SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code,
+             COALESCE(pod.unit_price, 0) as unit_price,
+             COALESCE(po.tax_type, 'Exclude') as tax_type
       FROM ReceivingDetails d
       LEFT JOIN Items i ON d.item_id = i.id
+      LEFT JOIN Receivings r ON d.receiving_id = r.id
+      LEFT JOIN PurchaseOrders po ON r.po_id = po.id
+      LEFT JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND d.item_id = pod.item_id
       WHERE d.receiving_id = ?
     `, [req.params.id]);
 
@@ -1420,11 +1404,11 @@ app.get('/api/ap-invoices/:id', async (req, res) => {
 
 app.post('/api/ap-invoices', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, items } = req.body;
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items } = req.body;
 
     await executeQuery(
-      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null]
+      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude']
     );
 
     const result = await executeQuery('SELECT * FROM APInvoices WHERE doc_number = ?', [doc_number]);
@@ -1447,11 +1431,11 @@ app.post('/api/ap-invoices', async (req, res) => {
 
 app.put('/api/ap-invoices/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, items } = req.body;
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items } = req.body;
 
     await executeQuery(
-      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, req.params.id]
+      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, tax_type || 'Exclude', req.params.id]
     );
 
     await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [req.params.id]);
@@ -1508,9 +1492,11 @@ app.put('/api/ap-invoices/:id/unpost', async (req, res) => {
 app.get('/api/ar-invoices', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT ar.*, p.name as partner_name
+      SELECT ar.*, p.name as partner_name, sp.name as sales_person_name, pt.name as payment_term_name
       FROM ARInvoices ar
       LEFT JOIN Partners p ON ar.partner_id = p.id
+      LEFT JOIN SalesPersons sp ON ar.sales_person_id = sp.id
+      LEFT JOIN PaymentTerms pt ON ar.payment_term_id = pt.id
       ORDER BY ar.doc_date DESC
     `);
     res.json({ success: true, data: result });
@@ -1521,50 +1507,149 @@ app.get('/api/ar-invoices', async (req, res) => {
 
 app.post('/api/ar-invoices', async (req, res) => {
   try {
-    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status } = req.body;
+    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
 
     await executeQuery(
-      'INSERT INTO ARInvoices (doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, due_date, partner_id, shipment_id, total_amount || 0, status || 'Unpaid']
+      'INSERT INTO ARInvoices (doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, sales_person_id, payment_term_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, due_date, partner_id, shipment_id || null, total_amount || 0, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null]
     );
 
     const result = await executeQuery('SELECT * FROM ARInvoices WHERE doc_number = ?', [doc_number]);
+    const arId = result[0]?.id;
+
+    if (items && items.length > 0 && arId) {
+      for (const item of items) {
+        await executeQuery(
+          'INSERT INTO ARInvoiceDetails (ar_invoice_id, item_id, description, quantity, unit_price, line_total) VALUES (?, ?, ?, ?, ?, ?)',
+          [arId, item.item_id || null, item.description || '', item.quantity || 0, item.unit_price || 0, item.amount || 0]
+        );
+      }
+    }
+
     res.json({ success: true, data: result[0], message: 'AR Invoice berhasil dibuat' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ==================== AP INVOICES ====================
-app.get('/api/ap-invoices', async (req, res) => {
+app.put('/api/ar-invoices/:id', async (req, res) => {
+  try {
+    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
+
+    await executeQuery(
+      'UPDATE ARInvoices SET doc_number = ?, doc_date = ?, due_date = ?, partner_id = ?, shipment_id = ?, total_amount = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, sales_person_id = ?, payment_term_id = ? WHERE id = ?',
+      [doc_number, doc_date, due_date, partner_id, shipment_id || null, total_amount || 0, status, notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null, req.params.id]
+    );
+
+    await executeQuery('DELETE FROM ARInvoiceDetails WHERE ar_invoice_id = ?', [req.params.id]);
+
+    if (items && items.length > 0) {
+      for (const d of items) {
+        await executeQuery(
+          'INSERT INTO ARInvoiceDetails (ar_invoice_id, item_id, description, quantity, unit_price, amount, shipment_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, d.item_id || null, d.description || '', d.quantity || 0, d.unit_price || 0, d.amount || 0, d.shipment_id || null]
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'AR Invoice berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/ar-invoices/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT status FROM ARInvoices WHERE id = ?', [req.params.id]);
+    if (result[0]?.status !== 'Draft') {
+      return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM ARInvoiceDetails WHERE ar_invoice_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM ARInvoices WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'AR Invoice berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/ar-invoices/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM ARInvoices WHERE id = ?', [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, message: 'AR Invoice not found' });
+
+    const details = await executeQuery(`
+      SELECT d.*, i.name as item_name, i.code as item_code
+      FROM ARInvoiceDetails d
+      LEFT JOIN Items i ON d.item_id = i.id
+      WHERE d.ar_invoice_id = ?
+    `, [req.params.id]);
+
+    const data = { ...result[0], details };
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/ar-invoices/:id/post', async (req, res) => {
+  try {
+    await executeQuery('UPDATE ARInvoices SET status = ? WHERE id = ?', ['Posted', req.params.id]);
+    res.json({ success: true, message: 'AR Invoice berhasil di-post' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/ar-invoices/:id/unpost', async (req, res) => {
+  try {
+    await executeQuery('UPDATE ARInvoices SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    res.json({ success: true, message: 'AR Invoice berhasil di-unpost (Kembali ke Draft)' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== SHIPMENTS ====================
+app.get('/api/shipments', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT ap.*, p.name as partner_name
-      FROM APInvoices ap
-      LEFT JOIN Partners p ON ap.partner_id = p.id
-      ORDER BY ap.doc_date DESC
-    `);
+        SELECT s.*, p.name as partner_name, p.code as partner_code
+        FROM Shipments s
+        LEFT JOIN Partners p ON s.partner_id = p.id
+        ORDER BY s.doc_date DESC
+      `);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.post('/api/ap-invoices', async (req, res) => {
+app.get('/api/shipments/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, due_date, partner_id, receiving_id, total_amount, status } = req.body;
+    const result = await executeQuery('SELECT * FROM Shipments WHERE id = ?', [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, message: 'Shipment not found' });
 
-    await executeQuery(
-      'INSERT INTO APInvoices (doc_number, doc_date, due_date, partner_id, receiving_id, total_amount, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, due_date, partner_id, receiving_id, total_amount || 0, status || 'Unpaid']
-    );
+    const details = await executeQuery(`
+        SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code,
+               COALESCE(sod.unit_price, 0) as unit_price,
+               COALESCE(so.tax_type, 'Exclude') as tax_type,
+               so.sales_person_id,
+               so.payment_term_id
+        FROM ShipmentDetails d
+        LEFT JOIN Items i ON d.item_id = i.id
+        LEFT JOIN Shipments s ON d.shipment_id = s.id
+        LEFT JOIN SalesOrders so ON s.so_id = so.id
+        LEFT JOIN SalesOrderDetails sod ON s.so_id = sod.so_id AND d.item_id = sod.item_id
+        WHERE d.shipment_id = ?
+      `, [req.params.id]);
 
-    const result = await executeQuery('SELECT * FROM APInvoices WHERE doc_number = ?', [doc_number]);
-    res.json({ success: true, data: result[0], message: 'AP Invoice berhasil dibuat' });
+    res.json({ success: true, data: { ...result[0], details } });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+
 
 // ==================== JOURNAL VOUCHERS ====================
 app.get('/api/journal-vouchers', async (req, res) => {

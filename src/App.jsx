@@ -20,6 +20,7 @@ import SalesOrderList from './pages/transaction/SalesOrderList';
 import ReceivingList from './pages/transaction/ReceivingList';
 import ShipmentList from './pages/transaction/ShipmentList';
 import APInvoiceList from './pages/transaction/APInvoiceList';
+import ARInvoiceList from './pages/transaction/ARInvoiceList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
 import POOutstandingReport from './pages/report/POOutstandingReport';
@@ -85,6 +86,8 @@ function App() {
                 return <ShipmentList />;
             case 'ap-invoice':
                 return <APInvoiceList />;
+            case 'ar-invoice':
+                return <ARInvoiceList />;
             case 'sales-order':
                 return <SalesOrderList />;
             case 'menu-settings':

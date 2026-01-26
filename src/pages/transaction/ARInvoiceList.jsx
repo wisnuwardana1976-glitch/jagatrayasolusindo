@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
 
-function APInvoiceList() {
+function ARInvoiceList() {
     const [invoices, setInvoices] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editingItem, setEditingItem] = useState(null);
-    const [suppliers, setSuppliers] = useState([]);
-    const [receivings, setReceivings] = useState([]);
+    const [customers, setCustomers] = useState([]);
+    const [shipments, setShipments] = useState([]);
     const [items, setItems] = useState([]);
     const [transcodes, setTranscodes] = useState([]);
+    const [salesPersons, setSalesPersons] = useState([]);
+    const [paymentTerms, setPaymentTerms] = useState([]);
 
-    // "sourceType": 'receiving' | 'manual'
-    const [sourceType, setSourceType] = useState('receiving');
+    // "sourceType": 'shipment' | 'manual'
+    const [sourceType, setSourceType] = useState('shipment');
 
     const [formData, setFormData] = useState({
         doc_number: '',
@@ -19,12 +21,13 @@ function APInvoiceList() {
         due_date: new Date().toISOString().split('T')[0],
         transcode_id: '',
         partner_id: '',
-        receiving_id: '',
-        status: 'Draft',
+        shipment_id: '',
         status: 'Draft',
         notes: '',
         items: [],
-        tax_type: 'Exclude'
+        tax_type: 'Exclude',
+        sales_person_id: '',
+        payment_term_id: ''
     });
 
     useEffect(() => {
@@ -35,7 +38,7 @@ function APInvoiceList() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/ap-invoices');
+            const response = await fetch('/api/ar-invoices');
             const data = await response.json();
             if (data.success) {
                 setInvoices(data.data);
@@ -48,27 +51,35 @@ function APInvoiceList() {
 
     const fetchMasterData = async () => {
         try {
-            const [supRes, recRes, itemRes, transRes] = await Promise.all([
-                fetch('/api/partners?type=Supplier'),
-                fetch('/api/receivings'),
+            const [custRes, shpRes, itemRes, transRes, spRes, ptRes] = await Promise.all([
+                fetch('/api/partners?type=Customer'),
+                fetch('/api/shipments'),
                 fetch('/api/items'),
-                fetch('/api/transcodes')
+                fetch('/api/transcodes'),
+                fetch('/api/salespersons'),
+                fetch('/api/payment-terms')
             ]);
-            const supData = await supRes.json();
-            const recData = await recRes.json();
+            const custData = await custRes.json();
+            const shpData = await shpRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
+            const spData = await spRes.json();
+            const ptData = await ptRes.json();
 
-            if (supData.success) setSuppliers(supData.data);
-            if (recData.success) {
-                // Only show Approved receivings for selection
-                setReceivings(recData.data.filter(r => r.status === 'Approved'));
+            if (custData.success) setCustomers(custData.data);
+            if (shpData.success) {
+                // Filter Shipments if needed, maybe only 'Shipped' status? Assuming 'Shipped' or similar for now.
+                // Assuming status is 'Shipped' or similar. If not sure, show all or filter if needed.
+                // Let's just show all for now or check status. Standard flow usually picking from Shipped.
+                setShipments(shpData.data);
             }
             if (itemData.success) setItems(itemData.data);
             if (transData.success) {
-                // Filter for AP Invoice transcode (nomortranscode === 7)
-                setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 7));
+                // Filter for AR Invoice transcode (nomortranscode === 8)
+                setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 8));
             }
+            if (spData.success) setSalesPersons(spData.data);
+            if (ptData.success) setPaymentTerms(ptData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -88,11 +99,11 @@ function APInvoiceList() {
         }
     };
 
-    const handleSelectReceiving = async (recId) => {
-        if (!recId) {
+    const handleSelectShipment = async (shpId) => {
+        if (!shpId) {
             setFormData(prev => ({
                 ...prev,
-                receiving_id: '',
+                shipment_id: '',
                 partner_id: '',
                 items: []
             }));
@@ -100,37 +111,38 @@ function APInvoiceList() {
         }
 
         try {
-            const response = await fetch(`/api/receivings/${recId}`);
+            const response = await fetch(`/api/shipments/${shpId}`);
             const data = await response.json();
             if (data.success) {
-                const rec = data.data;
-                const recDetails = rec.details || [];
+                const shp = data.data;
+                const shpDetails = shp.details || [];
 
                 setFormData(prev => ({
                     ...prev,
-                    receiving_id: rec.id,
-                    partner_id: rec.partner_id,
-                    items: recDetails.map(d => ({
+                    shipment_id: shp.id,
+                    partner_id: shp.partner_id,
+                    items: shpDetails.map(d => ({
                         item_id: d.item_id,
-                        description: d.item_name || '', // Use item name or remarks
+                        description: d.item_name || '',
                         quantity: parseFloat(d.quantity),
-                        unit_price: parseFloat(d.unit_price) || 0, // Price from PO
+                        unit_price: parseFloat(d.unit_price) || 0, // Price from SO
                         amount: 0,
-                        receiving_id: rec.id
+                        shipment_id: shp.id
                     })),
-                    tax_type: rec.tax_type || 'Exclude'
+                    sales_person_id: (shpDetails.length > 0 && shpDetails[0].sales_person_id) ? shpDetails[0].sales_person_id : '',
+                    payment_term_id: (shpDetails.length > 0 && shpDetails[0].payment_term_id) ? shpDetails[0].payment_term_id : '',
+                    tax_type: shp.tax_type || 'Exclude'
                 }));
             }
         } catch (error) {
-            console.error('Error fetching Receiving details:', error);
+            console.error('Error fetching Shipment details:', error);
         }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const MyDate = new Date();
-            const url = editingItem ? `/api/ap-invoices/${editingItem}` : '/api/ap-invoices';
+            const url = editingItem ? `/api/ar-invoices/${editingItem}` : '/api/ar-invoices';
             const method = editingItem ? 'PUT' : 'POST';
 
             const payload = {
@@ -163,7 +175,7 @@ function APInvoiceList() {
 
     const handleEdit = async (id) => {
         try {
-            const response = await fetch(`/api/ap-invoices/${id}`);
+            const response = await fetch(`/api/ar-invoices/${id}`);
             const data = await response.json();
             if (data.success) {
                 const inv = data.data;
@@ -173,22 +185,23 @@ function APInvoiceList() {
                     due_date: inv.due_date ? new Date(inv.due_date).toISOString().split('T')[0] : '',
                     transcode_id: inv.transcode_id || '',
                     partner_id: inv.partner_id || '',
-                    receiving_id: '', // Reset receiving if editing manually, or logic to fetch if stored
+                    shipment_id: '',
                     status: inv.status,
                     notes: inv.notes || '',
+                    sales_person_id: inv.sales_person_id || '',
+                    payment_term_id: inv.payment_term_id || '',
                     items: inv.details.map(d => ({
                         item_id: d.item_id,
                         description: d.description,
                         quantity: parseFloat(d.quantity),
                         unit_price: parseFloat(d.unit_price),
                         amount: parseFloat(d.amount),
-                        amount: parseFloat(d.amount),
-                        receiving_id: d.receiving_id
+                        shipment_id: d.shipment_id
                     })),
                     tax_type: inv.tax_type || 'Exclude'
                 });
 
-                setSourceType('manual'); // Default to manual on edit for now
+                setSourceType('manual');
                 setEditingItem(id);
                 setShowForm(true);
             }
@@ -200,7 +213,7 @@ function APInvoiceList() {
     const handleDelete = async (id) => {
         if (!confirm('Yakin ingin menghapus Invoice ini?')) return;
         try {
-            const response = await fetch(`/api/ap-invoices/${id}`, { method: 'DELETE' });
+            const response = await fetch(`/api/ar-invoices/${id}`, { method: 'DELETE' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -216,7 +229,7 @@ function APInvoiceList() {
     const handlePost = async (id) => {
         if (!confirm('Post Invoice ini?')) return;
         try {
-            const response = await fetch(`/api/ap-invoices/${id}/post`, { method: 'PUT' });
+            const response = await fetch(`/api/ar-invoices/${id}/post`, { method: 'PUT' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -232,7 +245,7 @@ function APInvoiceList() {
     const handleUnpost = async (id) => {
         if (!confirm('Unpost Invoice ini? Status kembali ke Draft.')) return;
         try {
-            const response = await fetch(`/api/ap-invoices/${id}/unpost`, { method: 'PUT' });
+            const response = await fetch(`/api/ar-invoices/${id}/unpost`, { method: 'PUT' });
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
@@ -262,7 +275,6 @@ function APInvoiceList() {
     const handleItemChange = (index, field, value) => {
         const newItems = [...formData.items];
         newItems[index][field] = value;
-        // Auto-calculate description if item selected
         if (field === 'item_id') {
             const item = items.find(i => i.id === parseInt(value));
             if (item) newItems[index].description = item.name;
@@ -272,18 +284,20 @@ function APInvoiceList() {
 
     const resetForm = () => {
         setEditingItem(null);
-        setSourceType('receiving');
+        setSourceType('shipment');
         setFormData({
             doc_number: 'AUTO',
             doc_date: new Date().toISOString().split('T')[0],
             due_date: new Date().toISOString().split('T')[0],
             transcode_id: '',
             partner_id: '',
-            receiving_id: '',
+            shipment_id: '',
             status: 'Draft',
             notes: '',
             items: [],
-            tax_type: 'Exclude'
+            tax_type: 'Exclude',
+            sales_person_id: '',
+            payment_term_id: ''
         });
     };
 
@@ -349,7 +363,7 @@ function APInvoiceList() {
     return (
         <div>
             <div className="page-header">
-                <h1 className="page-title">AP Invoice / Tagihan Pembelian</h1>
+                <h1 className="page-title">AR Invoice / Tagihan Penjualan</h1>
                 <button className="btn btn-primary" onClick={() => { resetForm(); setShowForm(true); }}>
                     + Buat Invoice Baru
                 </button>
@@ -425,14 +439,14 @@ function APInvoiceList() {
                                             <input
                                                 type="radio"
                                                 name="sourceType"
-                                                checked={sourceType === 'receiving'}
+                                                checked={sourceType === 'shipment'}
                                                 onChange={() => {
-                                                    setSourceType('receiving');
-                                                    setFormData(prev => ({ ...prev, receiving_id: '', items: [] }));
+                                                    setSourceType('shipment');
+                                                    setFormData(prev => ({ ...prev, shipment_id: '', items: [] }));
                                                 }}
                                                 disabled={editingItem || formData.status !== 'Draft'}
                                             />
-                                            <span style={{ marginLeft: '5px' }}>Dari Receiving</span>
+                                            <span style={{ marginLeft: '5px' }}>Dari Shipment</span>
                                         </label>
                                         <label style={{ display: 'inline-flex', alignItems: 'center' }}>
                                             <input
@@ -441,7 +455,7 @@ function APInvoiceList() {
                                                 checked={sourceType === 'manual'}
                                                 onChange={() => {
                                                     setSourceType('manual');
-                                                    setFormData(prev => ({ ...prev, receiving_id: '', items: [] }));
+                                                    setFormData(prev => ({ ...prev, shipment_id: '', items: [] }));
                                                 }}
                                                 disabled={editingItem || formData.status !== 'Draft'}
                                             />
@@ -452,34 +466,60 @@ function APInvoiceList() {
                             </div>
 
                             <div className="form-row">
-                                {sourceType === 'receiving' && (
+                                {sourceType === 'shipment' && (
                                     <div className="form-group">
-                                        <label>Receiving (Approved)</label>
+                                        <label>Shipment (Active)</label>
                                         <select
-                                            value={formData.receiving_id}
-                                            onChange={(e) => handleSelectReceiving(e.target.value)}
+                                            value={formData.shipment_id}
+                                            onChange={(e) => handleSelectShipment(e.target.value)}
                                             disabled={editingItem || formData.status !== 'Draft'}
                                         >
-                                            <option value="">-- Pilih Receiving --</option>
-                                            {receivings.map(rec => (
-                                                <option key={rec.id} value={rec.id}>
-                                                    {rec.doc_number} - {rec.partner_name}
+                                            <option value="">-- Pilih Shipment --</option>
+                                            {shipments.map(shp => (
+                                                <option key={shp.id} value={shp.id}>
+                                                    {shp.doc_number} - {shp.partner_name}
                                                 </option>
                                             ))}
                                         </select>
                                     </div>
                                 )}
                                 <div className="form-group">
-                                    <label>Supplier</label>
+                                    <label>Customer</label>
                                     <select
                                         value={formData.partner_id}
                                         onChange={(e) => setFormData({ ...formData, partner_id: e.target.value })}
                                         required
-                                        disabled={formData.receiving_id || formData.status !== 'Draft'}
+                                        disabled={formData.shipment_id || formData.status !== 'Draft'}
                                     >
-                                        <option value="">-- Pilih Supplier --</option>
-                                        {suppliers.map(s => (
-                                            <option key={s.id} value={s.id}>{s.code} - {s.name}</option>
+                                        <option value="">-- Pilih Customer --</option>
+                                        {customers.map(c => (
+                                            <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="form-group">
+                                    <label>Sales Person</label>
+                                    <select
+                                        value={formData.sales_person_id}
+                                        onChange={(e) => setFormData({ ...formData, sales_person_id: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">-- Pilih Sales Person --</option>
+                                        {salesPersons.map(sp => (
+                                            <option key={sp.id} value={sp.id}>{sp.code} - {sp.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="form-group">
+                                    <label>Term of Payment</label>
+                                    <select
+                                        value={formData.payment_term_id}
+                                        onChange={(e) => setFormData({ ...formData, payment_term_id: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">-- Pilih Term --</option>
+                                        {paymentTerms.map(pt => (
+                                            <option key={pt.id} value={pt.id}>{pt.code} - {pt.days} Hari</option>
                                         ))}
                                     </select>
                                 </div>
@@ -515,7 +555,7 @@ function APInvoiceList() {
                                         {formData.items.length === 0 ? (
                                             <tr>
                                                 <td colSpan="6" style={{ textAlign: 'center', padding: '1rem', color: '#888' }}>
-                                                    {sourceType === 'receiving' && !formData.receiving_id ? 'Pilih Receiving terlebih dahulu.' : 'Belum ada item.'}
+                                                    {sourceType === 'shipment' && !formData.shipment_id ? 'Pilih Shipment terlebih dahulu.' : 'Belum ada item.'}
                                                 </td>
                                             </tr>
                                         ) : (
@@ -526,7 +566,7 @@ function APInvoiceList() {
                                                             value={item.item_id}
                                                             onChange={(e) => handleItemChange(idx, 'item_id', e.target.value)}
                                                             style={{ width: '100%' }}
-                                                            disabled={formData.receiving_id || formData.status !== 'Draft'}
+                                                            disabled={formData.shipment_id || formData.status !== 'Draft'}
                                                         >
                                                             <option value="">-- Non-Inventory --</option>
                                                             {items.map(i => (
@@ -606,7 +646,7 @@ function APInvoiceList() {
                                                                     value={formData.tax_type}
                                                                     onChange={(e) => setFormData({ ...formData, tax_type: e.target.value })}
                                                                     style={{ width: 'auto', padding: '0.2rem', fontSize: '0.9rem' }}
-                                                                    disabled={formData.status !== 'Draft' || !!formData.receiving_id}
+                                                                    disabled={formData.status !== 'Draft' || !!formData.shipment_id}
                                                                 >
                                                                     <option value="Exclude">Exclude (Tambah)</option>
                                                                     <option value="Include">Include (Termasuk)</option>
@@ -656,7 +696,7 @@ function APInvoiceList() {
                                 <th>Tanggal</th>
                                 <th>No. Dokumen</th>
                                 <th>jth Tempo</th>
-                                <th>Supplier</th>
+                                <th>Customer</th>
                                 <th>Status</th>
                                 <th style={{ textAlign: 'center' }}>Aksi</th>
                             </tr>
@@ -664,7 +704,7 @@ function APInvoiceList() {
                         <tbody>
                             {invoices.length === 0 ? (
                                 <tr>
-                                    <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>Belum ada AP Invoice</td>
+                                    <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>Belum ada AR Invoice</td>
                                 </tr>
                             ) : (
                                 invoices.map(inv => (
@@ -703,4 +743,4 @@ function APInvoiceList() {
     );
 }
 
-export default APInvoiceList;
+export default ARInvoiceList;
