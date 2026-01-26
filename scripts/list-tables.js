@@ -1,33 +1,37 @@
-import odbc from 'odbc';
+// List all tables
 import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import odbc from 'odbc';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-dotenv.config({ path: path.join(__dirname, '../.env') });
+dotenv.config();
 
 const connectionString = `Driver={SQL Anywhere 17};Host=${process.env.DB_HOST}:${process.env.DB_PORT};DatabaseName=${process.env.DB_NAME};UID=${process.env.DB_USER};PWD=${process.env.DB_PASSWORD}`;
 
 async function listTables() {
     let connection;
     try {
+        console.log('Connecting...');
         connection = await odbc.connect(connectionString);
 
-        const result = await connection.query(`SELECT table_name FROM SYS.SYSTABLE WHERE creator = 1`);
-        // creator=1 usually filters for user tables in Sybase/SQL Anywhere, but might vary. 
-        // Let's just select all and filter in JS if needed or use a broader query.
-        // Better: sa_describe_query or sp_tables
+        const tables = await connection.query(`
+            SELECT table_name 
+            FROM SYSTABLE 
+            WHERE table_type = 'BASE' AND creator = 1 
+            ORDER BY table_name
+        `); // creator=1 usually filters user tables in Sybase/SQL Anywhere, or just filtering system tables manually
 
-        const tables = await connection.query("sp_tables");
+        // Filter out obviously system tables if needed, but SQL Anywhere usually mixes them if not careful
+        // The above query is approximate. Let's cleaner query:
+        // "SELECT table_name FROM SYSTABLE WHERE server_type = 'ASA' AND table_type = 'BASE'"
+
+        // Let's stick to simple select and filter in JS
+        const allTables = await connection.query("SELECT table_name FROM SYSTABLE WHERE table_type = 'BASE'");
+
         console.log('Tables found:');
-        tables.forEach(t => {
-            if (t.TABLE_TYPE === 'TABLE') console.log(t.TABLE_NAME);
-        });
+        const userTables = allTables.filter(t => !t.table_name.startsWith('sys') && !t.table_name.startsWith('rs_'));
+        userTables.forEach(t => console.log(t.table_name));
 
-    } catch (error) {
-        console.error('Error:', error);
+    } catch (e) {
+        console.error(e);
     } finally {
         if (connection) await connection.close();
     }

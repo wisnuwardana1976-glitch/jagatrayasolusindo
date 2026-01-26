@@ -32,6 +32,7 @@ const menuItems = [
             { id: 'warehouse', label: 'Warehouse', icon: 'home' },
             { id: 'sub-warehouse', label: 'Sub Warehouse', icon: 'box' },
             { id: 'location', label: 'Location', icon: 'map' },
+            { id: 'recalculate-inventory', label: 'Recalculate Stock', icon: 'rotate-cw' },
         ],
     },
     {
@@ -64,6 +65,7 @@ const menuItems = [
             { id: 'cash', label: 'Cash', icon: 'dollar-sign' },
             { id: 'bank', label: 'Bank', icon: 'credit-card' },
             { id: 'journal-voucher', label: 'Jurnal Voucher', icon: 'book-open' },
+            { id: 'system-generated-journal', label: 'Auto Journal', icon: 'file-text' },
         ],
     },
 ];
@@ -242,6 +244,14 @@ const icons = {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
     ),
+    calendar: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+        </svg>
+    ),
 };
 
 import { useState, useEffect } from 'react';
@@ -362,13 +372,29 @@ function Sidebar({ currentPage, setCurrentPage }) {
                     </span>
                 </div>
                 {expandedSections['Pengaturan'] !== false && (
-                    <div
-                        className={`nav-item ${currentPage === 'menu-settings' ? 'active' : ''}`}
-                        onClick={() => setCurrentPage('menu-settings')}
-                    >
-                        {icons['settings']}
-                        <span>Pengaturan Menu</span>
-                    </div>
+                    <>
+                        <div
+                            className={`nav-item ${currentPage === 'menu-settings' ? 'active' : ''}`}
+                            onClick={() => setCurrentPage('menu-settings')}
+                        >
+                            {icons['settings']}
+                            <span>Pengaturan Menu</span>
+                        </div>
+                        <div
+                            className={`nav-item ${currentPage === 'accounting-period' ? 'active' : ''}`}
+                            onClick={() => setCurrentPage('accounting-period')}
+                        >
+                            {icons['calendar']}
+                            <span>Periode Akuntansi</span>
+                        </div>
+                        <div
+                            className={`nav-item ${currentPage === 'gl-settings' ? 'active' : ''}`}
+                            onClick={() => setCurrentPage('gl-settings')}
+                        >
+                            {icons['settings']}
+                            <span>GL Settings</span>
+                        </div>
+                    </>
                 )}
             </div>
         </aside>

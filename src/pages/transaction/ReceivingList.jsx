@@ -183,8 +183,8 @@ function ReceivingList() {
         }
     };
 
-    const handleApprove = async (id) => {
-        if (!confirm('Approve Receiving ini? Status akan menjadi Approved.')) return;
+    const handlePost = async (id) => {
+        if (!confirm('Post Receiving ini? Jurnal otomatis akan terbentuk.')) return;
         try {
             const response = await fetch(`/api/receivings/${id}/approve`, { method: 'PUT' });
             const data = await response.json();
@@ -199,8 +199,8 @@ function ReceivingList() {
         }
     };
 
-    const handleUnapprove = async (id) => {
-        if (!confirm('Unapprove Receiving ini? Status akan kembali menjadi Draft.')) return;
+    const handleUnpost = async (id) => {
+        if (!confirm('Unpost Receiving ini? Jurnal otomatis akan dihapus.')) return;
         try {
             const response = await fetch(`/api/receivings/${id}/unapprove`, { method: 'PUT' });
             const data = await response.json();
@@ -495,14 +495,14 @@ function ReceivingList() {
                                         <td style={{ textAlign: 'center' }}>
                                             {rec.status === 'Draft' ? (
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleApprove(rec.id)} title="Approve" style={{ color: 'green', marginRight: '5px' }}>✅</button>
+                                                    <button className="btn-icon" onClick={() => handlePost(rec.id)} title="Post" style={{ color: 'green', marginRight: '5px' }}>📮</button>
                                                     <button className="btn-icon" onClick={() => handleEdit(rec.id)} title="Edit" style={{ marginRight: '5px' }}>✏️</button>
                                                     <button className="btn-icon" onClick={() => handleDelete(rec.id)} title="Hapus">🗑️</button>
                                                 </>
                                             ) : (
 
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleUnapprove(rec.id)} title="Unapprove" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
+                                                    <button className="btn-icon" onClick={() => handleUnpost(rec.id)} title="Unpost" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
                                                     <button className="btn-icon" onClick={() => handleEdit(rec.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
                                                 </>
                                             )}

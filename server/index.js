@@ -2,13 +2,19 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import odbc from 'odbc';
+import fs from 'fs';
+
+const logDebug = (msg) => {
+  const timestamp = new Date().toISOString();
+  fs.appendFileSync('journal_debug.log', `[${timestamp}] ${msg}\n`);
+};
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// Middleware - MUST be before routes
 app.use(cors());
 app.use(express.json());
 
@@ -32,18 +38,91 @@ async function connectDatabase() {
   }
 }
 
-async function executeQuery(sql, params = []) {
-  if (!dbPool || !isConnected) {
-    throw new Error('Database tidak terhubung');
-  }
-  const connection = await dbPool.connect();
+async function executeQuery(query, params = []) {
+  let connection;
   try {
-    const result = await connection.query(sql, params);
+    connection = await odbc.connect(connectionString);
+    const result = await connection.query(query, params);
     return result;
+  } catch (error) {
+    throw error;
   } finally {
-    await connection.close();
+    if (connection) {
+      await connection.close();
+    }
   }
 }
+
+async function validatePeriod(date) {
+  // Check if any period exists. If none, allow for now.
+  const allPeriods = await executeQuery('SELECT count(*) as count FROM AccountingPeriods WHERE active = "Y"');
+  if (allPeriods[0].count === 0) return true;
+
+  const result = await executeQuery(
+    "SELECT count(*) as count FROM AccountingPeriods WHERE ? BETWEEN start_date AND end_date AND status = 'Open' AND active = 'Y'",
+    [date]
+  );
+  return result[0].count > 0;
+}
+
+// ==================== ACCOUNTING PERIODS ====================
+app.get('/api/accounting-periods', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM AccountingPeriods ORDER BY start_date DESC');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/accounting-periods', async (req, res) => {
+  try {
+    const { code, name, start_date, end_date, status, active, is_starting } = req.body;
+
+    // If this is a starting period, clear any existing starting periods
+    if (is_starting === 'Y') {
+      await executeQuery("UPDATE AccountingPeriods SET is_starting = 'N' WHERE is_starting = 'Y'");
+    }
+
+    await executeQuery(
+      'INSERT INTO AccountingPeriods (code, name, start_date, end_date, status, active, is_starting) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [code, name, start_date, end_date, status || 'Open', active || 'Y', is_starting || 'N']
+    );
+    res.json({ success: true, message: 'Accounting Period berhasil ditambahkan' });
+  } catch (error) {
+    console.error('Error adding accounting period:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/accounting-periods/:id', async (req, res) => {
+  try {
+    const { code, name, start_date, end_date, status, active, is_starting } = req.body;
+
+    // If this is a starting period, clear any existing starting periods
+    if (is_starting === 'Y') {
+      await executeQuery("UPDATE AccountingPeriods SET is_starting = 'N' WHERE is_starting = 'Y' AND id != ?", [req.params.id]);
+    }
+
+    await executeQuery(
+      'UPDATE AccountingPeriods SET code = ?, name = ?, start_date = ?, end_date = ?, status = ?, active = ?, is_starting = ? WHERE id = ?',
+      [code, name, start_date, end_date, status, active, is_starting || 'N', req.params.id]
+    );
+    res.json({ success: true, message: 'Accounting Period berhasil diupdate' });
+  } catch (error) {
+    console.error('Error updating accounting period:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/accounting-periods/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM AccountingPeriods WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Accounting Period berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // ==================== STATUS ====================
 app.get('/api/test', async (req, res) => {
@@ -542,7 +621,42 @@ app.put('/api/shipments/:id', async (req, res) => {
 
 app.put('/api/shipments/:id/approve', async (req, res) => {
   try {
-    await executeQuery('UPDATE Shipments SET status = ? WHERE id = ?', ['Approved', req.params.id]);
+    const shId = req.params.id;
+    await executeQuery('UPDATE Shipments SET status = ? WHERE id = ?', ['Approved', shId]);
+
+    // ================== AUTOMATED JOURNAL (SHIPMENT) ==================
+    // Debit: Uninvoice Shipment
+    // Credit: Penjualan Temporary
+
+    try {
+      const uninvoiceShipmentAcc = await getGlAccount('uninvoice_shipment_account');
+      const salesTempAcc = await getGlAccount('sales_temp_account');
+
+      if (uninvoiceShipmentAcc && salesTempAcc) {
+        // Get Data (Qty * Price from SO)
+        const items = await executeQuery(`
+                SELECT sd.quantity, sod.unit_price, (sd.quantity * sod.unit_price) as total_value
+                FROM ShipmentDetails sd
+                JOIN Shipments s ON sd.shipment_id = s.id
+                JOIN SalesOrderDetails sod ON s.so_id = sod.so_id AND sd.item_id = sod.item_id
+                WHERE s.id = ?
+            `, [shId]);
+
+        const totalAmount = items.reduce((sum, item) => sum + (Number(item.total_value) || 0), 0);
+
+        if (totalAmount > 0) {
+          const shDoc = await executeQuery('SELECT doc_number, doc_date FROM Shipments WHERE id = ?', [shId]);
+
+          await createAutomatedJournal('Shipment', shId, shDoc[0].doc_number, shDoc[0].doc_date, [
+            { coa_id: uninvoiceShipmentAcc, debit: totalAmount, credit: 0, description: 'Uninvoiced Shipment' },
+            { coa_id: salesTempAcc, debit: 0, credit: totalAmount, description: 'Sales Temporary' }
+          ]);
+        }
+      }
+    } catch (jErr) {
+      console.error('Failed to generate shipment journal:', jErr);
+    }
+
     res.json({ success: true, message: 'Shipment berhasil di-approve' });
   } catch (error) {
     console.error('Error approving shipment:', error);
@@ -573,6 +687,65 @@ app.delete('/api/shipments/:id', async (req, res) => {
 
     res.json({ success: true, message: 'Shipment berhasil dihapus' });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== RECEIVINGS ====================
+app.put('/api/receivings/:id/approve', async (req, res) => {
+  try {
+    const rxId = req.params.id;
+    await executeQuery('UPDATE Receivings SET status = ? WHERE id = ?', ['Approved', rxId]);
+
+    // ================== AUTOMATED JOURNAL (RECEIVING) ==================
+    // Debit: Persediaan (Inventory)
+    // Credit: Hutang Dagang Temporary (AP Temporary)
+
+    try {
+      logDebug(`Attempting Journal for Receiving #${rxId}`);
+      // 1. Get Accounts
+      const inventoryAcc = await getGlAccount('inventory_account');
+      const apTempAcc = await getGlAccount('ap_temp_account');
+      logDebug(`Accounts: Inv=${inventoryAcc}, AP=${apTempAcc}`);
+
+      if (inventoryAcc && apTempAcc) {
+        // 2. Get Data (Qty * Unit Price)
+        const items = await executeQuery(`
+                SELECT rd.item_id, rd.quantity, pod.unit_price, (rd.quantity * pod.unit_price) as total_value
+                FROM ReceivingDetails rd
+                JOIN Receivings r ON rd.receiving_id = r.id
+                JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND rd.item_id = pod.item_id
+                WHERE r.id = ?
+            `, [rxId]);
+
+        logDebug(`Items found: ${JSON.stringify(items)}`);
+
+        const totalAmount = items.reduce((sum, item) => sum + (Number(item.total_value) || 0), 0);
+        logDebug(`Total Amount: ${totalAmount}`);
+
+        if (totalAmount > 0) {
+          // 3. Create Journal
+          const rxDoc = await executeQuery('SELECT doc_number, doc_date FROM Receivings WHERE id = ?', [rxId]);
+
+          const result = await createAutomatedJournal('Receiving', rxId, rxDoc[0].doc_number, rxDoc[0].doc_date, [
+            { coa_id: inventoryAcc, debit: totalAmount, credit: 0, description: 'Inventory Receipt' },
+            { coa_id: apTempAcc, debit: 0, credit: totalAmount, description: 'AP Temporary' }
+          ]);
+          logDebug(`Journal specific creation result: ${result}`);
+        } else {
+          logDebug('Total amount is 0, skipping journal.');
+        }
+      } else {
+        logDebug('Missing GL Accounts settings.');
+      }
+    } catch (jErr) {
+      logDebug(`ERROR: ${jErr.message}`);
+      console.error('Failed to generate receiving journal:', jErr);
+    }
+
+    res.json({ success: true, message: 'Receiving berhasil di-approve' });
+  } catch (error) {
+    console.error('Error approving receiving:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -739,7 +912,183 @@ app.delete('/api/sites/:id', async (req, res) => {
   }
 });
 
-// ==================== WAREHOUSES (MASTER WAREHOUSE) ====================
+// ==================== JOURNAL VOUCHERS ====================
+app.get('/api/journals', async (req, res) => {
+  try {
+    const { source_type } = req.query;
+    let sql = 'SELECT * FROM JournalVouchers';
+    const params = [];
+
+    if (source_type) {
+      // Filter by source type (for System Generated Journals)
+      if (source_type === 'SYSTEM') {
+        sql += ' WHERE source_type IS NOT NULL';
+      } else if (source_type === 'MANUAL') {
+        sql += ' WHERE source_type IS NULL';
+      } else {
+        sql += ' WHERE source_type = ?';
+        params.push(source_type);
+      }
+    } else {
+      // Default: Show all (or strictly manual if desired? User asked for separate menu)
+      // If no filter provided, maybe return all.
+    }
+
+    sql += ' ORDER BY doc_date DESC, doc_number DESC';
+
+    const result = await executeQuery(sql, params);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/journals/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM JournalVouchers WHERE id = ?', [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, message: 'Journal not found' });
+
+    const details = await executeQuery(`
+      SELECT d.*, a.code as coa_code, a.name as coa_name 
+      FROM JournalVoucherDetails d
+      LEFT JOIN Accounts a ON d.coa_id = a.id
+      WHERE d.jv_id = ?
+    `, [req.params.id]);
+
+    const journal = result[0];
+    journal.details = details;
+
+    res.json({ success: true, data: journal });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== GL SETTINGS ====================
+app.get('/api/gl-settings', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT s.*, a.code as account_code, a.name as account_name 
+      FROM GeneralLedgerSettings s
+      LEFT JOIN Accounts a ON s.account_id = a.id
+    `);
+
+    // Transform to key-value object for easier frontend consumption
+    const settings = {};
+    result.forEach(row => {
+      settings[row.setting_key] = {
+        account_id: row.account_id,
+        account_code: row.account_code,
+        account_name: row.account_name
+      };
+    });
+
+    res.json({ success: true, data: settings });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/gl-settings', async (req, res) => {
+  try {
+    const settings = req.body; // Expecting array of { key, account_id } or object
+
+    // If object { key: account_id, ... }
+    for (const [key, account_id] of Object.entries(settings)) {
+      if (!account_id) continue;
+
+      // Check if exists
+      const exists = await executeQuery('SELECT count(*) as count FROM GeneralLedgerSettings WHERE setting_key = ?', [key]);
+
+      if (exists[0].count > 0) {
+        await executeQuery('UPDATE GeneralLedgerSettings SET account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE setting_key = ?', [account_id, key]);
+      } else {
+        await executeQuery('INSERT INTO GeneralLedgerSettings (setting_key, account_id) VALUES (?, ?)', [key, account_id]);
+      }
+    }
+
+    res.json({ success: true, message: 'GL Settings updated successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Helper function to create automated journal (will be used by transaction updates)
+async function createAutomatedJournal(type, ref_id, doc_number, doc_date, details) {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+
+    // await connection.beginTransaction(); // Calling SQL directly for safety
+    await connection.query('BEGIN TRANSACTION');
+
+    // 1. Check if journal already exists
+    // Note: This check can be separate or same connection. Same is safer.
+    const existing = await connection.query('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', [type, ref_id]);
+    let jvId;
+
+    // For now using source doc number prefixed
+    const jvNumber = `JV-${doc_number}`;
+
+    if (existing.length > 0) {
+      logDebug(`Existing Journal found for ${type} #${doc_number} (ID: ${existing[0].id}). Replacing details.`);
+      jvId = existing[0].id;
+      // Update existing
+      await connection.query('UPDATE JournalVouchers SET doc_number = ?, doc_date = ? WHERE id = ?', [jvNumber, doc_date, jvId]);
+      await connection.query('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+    } else {
+      // Create new
+      logDebug(`Creating new JournalVoucher ${jvNumber}`);
+      await connection.query(
+        'INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)',
+        [jvNumber, doc_date, `Auto Journal for ${type} #${doc_number}`, 'Posted', type, ref_id]
+      );
+
+      const res = await connection.query('SELECT @@IDENTITY as id');
+      jvId = res[0].id;
+      logDebug(`New Journal ID: ${jvId}`);
+    }
+
+    // 2. Insert Details
+    logDebug(`Inserting ${details.length} details for JV #${jvId}`);
+    for (const det of details) {
+      if (!det.coa_id) {
+        logDebug(`Skipping detail due to missing coa_id: ${JSON.stringify(det)}`);
+        continue;
+      }
+      logDebug(`Inserting detail: Debit=${det.debit}, Credit=${det.credit}, COA=${det.coa_id}`);
+      await connection.query(
+        'INSERT INTO JournalVoucherDetails (jv_id, coa_id, debit, credit, description) VALUES (?, ?, ?, ?, ?)',
+        [jvId, det.coa_id, det.debit || 0, det.credit || 0, det.description || '']
+      );
+    }
+
+    await connection.query('COMMIT');
+    // await connection.commit();
+    logDebug(`Transaction Committed for JV #${jvId}`);
+
+    console.log(`✅ Automated Journal created for ${type} #${doc_number}`);
+    return true;
+  } catch (error) {
+    if (connection) {
+      try { await connection.query('ROLLBACK'); } catch (e) { }
+    }
+    logDebug(`ERROR in createAutomatedJournal: ${error.message}`);
+    console.error(`❌ Failed to create automated journal for ${type} #${doc_number}:`, error);
+    return false;
+  } finally {
+    if (connection) {
+      await connection.close();
+    }
+  }
+}
+
+// Function to get GL Account ID by setting key
+async function getGlAccount(key) {
+  const res = await executeQuery('SELECT account_id FROM GeneralLedgerSettings WHERE setting_key = ?', [key]);
+  return res.length > 0 ? res[0].account_id : null;
+}
+
 app.get('/api/warehouses', async (req, res) => {
   try {
     const result = await executeQuery(`
@@ -1202,6 +1551,7 @@ app.put('/api/sales-orders/:id/approve', async (req, res) => {
 
 app.put('/api/sales-orders/:id/unapprove', async (req, res) => {
   try {
+    // Post: Unapprove Sales Order
     await executeQuery('UPDATE SalesOrders SET status = ? WHERE id = ?', ['Draft', req.params.id]);
     res.json({ success: true, message: 'Sales Order berhasil di-unapprove (Kembali ke Draft)' });
   } catch (error) {
@@ -1329,14 +1679,32 @@ app.put('/api/receivings/:id', async (req, res) => {
 
 app.delete('/api/receivings/:id', async (req, res) => {
   try {
-    const result = await executeQuery('SELECT status, po_id FROM Receivings WHERE id = ?', [req.params.id]);
-    if (result[0]?.status !== 'Draft') {
+    const rxId = req.params.id;
+    const result = await executeQuery('SELECT * FROM Receivings WHERE id = ?', [rxId]);
+
+    if (result.length === 0) return res.status(404).json({ success: false, message: 'Receiving not found' });
+    if (result[0].status !== 'Draft') { // Should strictly be Draft, but let's check
       return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
     }
-    await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
-    await executeQuery('DELETE FROM Receivings WHERE id = ?', [req.params.id]);
 
-    if (result[0]?.po_id) await updatePOStatus(result[0].po_id);
+    // Check if used in other tables (logic exists?)
+
+    // Cleanup Journal (Safety measure)
+    try {
+      const checkJurnal = await executeQuery('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', ['Receiving', rxId]);
+      if (checkJurnal.length > 0) {
+        const jvId = checkJurnal[0].id;
+        await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+        await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+      }
+    } catch (jErr) {
+      console.error('Error cleaning up journal:', jErr);
+    }
+
+    await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [rxId]);
+    await executeQuery('DELETE FROM Receivings WHERE id = ?', [rxId]);
+
+    if (result[0].po_id) await updatePOStatus(result[0].po_id);
 
     res.json({ success: true, message: 'Receiving berhasil dihapus' });
   } catch (error) {
@@ -1356,8 +1724,23 @@ app.put('/api/receivings/:id/approve', async (req, res) => {
 
 app.put('/api/receivings/:id/unapprove', async (req, res) => {
   try {
-    await executeQuery('UPDATE Receivings SET status = ? WHERE id = ?', ['Draft', req.params.id]);
-    res.json({ success: true, message: 'Receiving berhasil di-unapprove (Kembali ke Draft)' });
+    const rxId = req.params.id;
+    await executeQuery('UPDATE Receivings SET status = ? WHERE id = ?', ['Draft', rxId]);
+
+    // ================== DELETE AUTOMATED JOURNAL ==================
+    try {
+      const checkJurnal = await executeQuery('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', ['Receiving', rxId]);
+      if (checkJurnal.length > 0) {
+        const jvId = checkJurnal[0].id;
+        await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+        await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+        console.log(`✅ Automated Journal deleted for Receiving #${rxId}`);
+      }
+    } catch (jErr) {
+      console.error('Failed to delete receiving journal:', jErr);
+    }
+
+    res.json({ success: true, message: 'Receiving berhasil di-unpost (Kembali ke Draft)' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1368,10 +1751,11 @@ app.put('/api/receivings/:id/unapprove', async (req, res) => {
 app.get('/api/ap-invoices', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT ap.*, p.name as partner_name, t.name as transcode_name
+      SELECT ap.*, p.name as partner_name, t.name as transcode_name, r.doc_number as receiving_number
       FROM APInvoices ap
       LEFT JOIN Partners p ON ap.partner_id = p.id
       LEFT JOIN Transcodes t ON ap.transcode_id = t.id
+      LEFT JOIN Receivings r ON ap.receiving_id = r.id
       ORDER BY ap.doc_date DESC, ap.doc_number DESC
     `);
     res.json({ success: true, data: result });
@@ -1404,11 +1788,11 @@ app.get('/api/ap-invoices/:id', async (req, res) => {
 
 app.post('/api/ap-invoices', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items } = req.body;
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items, receiving_id } = req.body;
 
     await executeQuery(
-      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude']
+      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, receiving_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', receiving_id || null]
     );
 
     const result = await executeQuery('SELECT * FROM APInvoices WHERE doc_number = ?', [doc_number]);
@@ -1431,11 +1815,11 @@ app.post('/api/ap-invoices', async (req, res) => {
 
 app.put('/api/ap-invoices/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items } = req.body;
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items, receiving_id } = req.body;
 
     await executeQuery(
-      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, tax_type || 'Exclude', req.params.id]
+      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, receiving_id = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, tax_type || 'Exclude', receiving_id || null, req.params.id]
     );
 
     await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [req.params.id]);
@@ -1457,12 +1841,26 @@ app.put('/api/ap-invoices/:id', async (req, res) => {
 
 app.delete('/api/ap-invoices/:id', async (req, res) => {
   try {
-    const result = await executeQuery('SELECT status FROM APInvoices WHERE id = ?', [req.params.id]);
+    const apId = req.params.id;
+    const result = await executeQuery('SELECT status FROM APInvoices WHERE id = ?', [apId]);
     if (result[0]?.status !== 'Draft') {
       return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
     }
-    await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [req.params.id]);
-    await executeQuery('DELETE FROM APInvoices WHERE id = ?', [req.params.id]);
+
+    // Cleanup Journal (Safety measure)
+    try {
+      const checkJurnal = await executeQuery('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', ['APInvoice', apId]);
+      if (checkJurnal.length > 0) {
+        const jvId = checkJurnal[0].id;
+        await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+        await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+      }
+    } catch (jErr) {
+      console.error('Error cleaning up journal:', jErr);
+    }
+
+    await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [apId]);
+    await executeQuery('DELETE FROM APInvoices WHERE id = ?', [apId]);
     res.json({ success: true, message: 'AP Invoice berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1471,8 +1869,60 @@ app.delete('/api/ap-invoices/:id', async (req, res) => {
 
 app.put('/api/ap-invoices/:id/post', async (req, res) => {
   try {
-    await executeQuery('UPDATE APInvoices SET status = ? WHERE id = ?', ['Posted', req.params.id]);
-    // In future: Add Journal Entries here
+    const apId = req.params.id;
+    await executeQuery('UPDATE APInvoices SET status = ? WHERE id = ?', ['Posted', apId]);
+
+    // ================== AUTOMATED JOURNAL (AP INVOICE) ==================
+    // Debit: Hutang Dagang Temporary (AP Temporary)
+    // Credit: Hutang Dagang (AP Trade)
+    // Debit: PPN Masukan (VAT In) - if applicable
+    try {
+      const apTempAcc = await getGlAccount('ap_temp_account');
+      const apTradeAcc = await getGlAccount('ap_trade_account');
+      const vatInAcc = await getGlAccount('vat_in_account');
+
+      if (apTempAcc && apTradeAcc) {
+        const apDoc = await executeQuery('SELECT * FROM APInvoices WHERE id = ?', [apId]);
+        const inv = apDoc[0];
+
+        const items = await executeQuery('SELECT * FROM APInvoiceDetails WHERE ap_invoice_id = ?', [apId]);
+
+        // Calculate Totals
+        let totalNet = 0;
+        let totalVAT = 0;
+
+        items.forEach(item => {
+          totalNet += (Number(item.quantity) * Number(item.unit_price)) || 0;
+        });
+
+        if (inv.tax_type === 'Include') {
+          totalVAT = totalNet - (totalNet / 1.11);
+          totalNet = totalNet / 1.11;
+        } else if (inv.tax_type === 'Exclude') {
+          totalVAT = totalNet * 0.11;
+        } else {
+          totalVAT = 0;
+        }
+
+        const totalAP = totalNet + totalVAT;
+
+        if (totalAP > 0) {
+          const journalDetails = [
+            { coa_id: apTempAcc, debit: totalNet, credit: 0, description: 'AP Temporary Reversal' },
+            { coa_id: apTradeAcc, debit: 0, credit: totalAP, description: 'Accounts Payable' }
+          ];
+
+          if (totalVAT > 0 && vatInAcc) {
+            journalDetails.push({ coa_id: vatInAcc, debit: totalVAT, credit: 0, description: 'VAT In' });
+          }
+
+          await createAutomatedJournal('APInvoice', apId, inv.doc_number, inv.doc_date, journalDetails);
+        }
+      }
+    } catch (jErr) {
+      console.error('Failed to generate AP Invoice journal:', jErr);
+    }
+
     res.json({ success: true, message: 'AP Invoice berhasil di-post' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1481,8 +1931,22 @@ app.put('/api/ap-invoices/:id/post', async (req, res) => {
 
 app.put('/api/ap-invoices/:id/unpost', async (req, res) => {
   try {
-    await executeQuery('UPDATE APInvoices SET status = ? WHERE id = ?', ['Draft', req.params.id]);
-    // In future: Reverse Journal Entries
+    const apId = req.params.id;
+    await executeQuery('UPDATE APInvoices SET status = ? WHERE id = ?', ['Draft', apId]);
+
+    // ================== DELETE AUTOMATED JOURNAL ==================
+    try {
+      const checkJurnal = await executeQuery('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', ['APInvoice', apId]);
+      if (checkJurnal.length > 0) {
+        const jvId = checkJurnal[0].id;
+        await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+        await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+        console.log(`✅ Automated Journal deleted for AP Invoice #${apId}`);
+      }
+    } catch (jErr) {
+      console.error('Failed to delete AP Invoice journal:', jErr);
+    }
+
     res.json({ success: true, message: 'AP Invoice berhasil di-unpost (Kembali ke Draft)' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1508,6 +1972,12 @@ app.get('/api/ar-invoices', async (req, res) => {
 app.post('/api/ar-invoices', async (req, res) => {
   try {
     const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
+
+    // Validate Accounting Period
+    const isPeriodOpen = await validatePeriod(doc_date);
+    if (!isPeriodOpen) {
+      return res.status(400).json({ success: false, error: 'Tanggal transaksi berada di luar periode akuntansi yang sedang aktif (Open).' });
+    }
 
     await executeQuery(
       'INSERT INTO ARInvoices (doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, sales_person_id, payment_term_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -1536,6 +2006,12 @@ app.put('/api/ar-invoices/:id', async (req, res) => {
   try {
     const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
 
+    // Validate Accounting Period
+    const isPeriodOpen = await validatePeriod(doc_date);
+    if (!isPeriodOpen) {
+      return res.status(400).json({ success: false, error: 'Tanggal transaksi berada di luar periode akuntansi yang sedang aktif (Open).' });
+    }
+
     await executeQuery(
       'UPDATE ARInvoices SET doc_number = ?, doc_date = ?, due_date = ?, partner_id = ?, shipment_id = ?, total_amount = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, sales_person_id = ?, payment_term_id = ? WHERE id = ?',
       [doc_number, doc_date, due_date, partner_id, shipment_id || null, total_amount || 0, status, notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null, req.params.id]
@@ -1560,12 +2036,26 @@ app.put('/api/ar-invoices/:id', async (req, res) => {
 
 app.delete('/api/ar-invoices/:id', async (req, res) => {
   try {
-    const result = await executeQuery('SELECT status FROM ARInvoices WHERE id = ?', [req.params.id]);
+    const arId = req.params.id;
+    const result = await executeQuery('SELECT status FROM ARInvoices WHERE id = ?', [arId]);
     if (result[0]?.status !== 'Draft') {
       return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
     }
-    await executeQuery('DELETE FROM ARInvoiceDetails WHERE ar_invoice_id = ?', [req.params.id]);
-    await executeQuery('DELETE FROM ARInvoices WHERE id = ?', [req.params.id]);
+
+    // Cleanup Journal (Safety measure)
+    try {
+      const checkJurnal = await executeQuery('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', ['ARInvoice', arId]);
+      if (checkJurnal.length > 0) {
+        const jvId = checkJurnal[0].id;
+        await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+        await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+      }
+    } catch (jErr) {
+      console.error('Error cleaning up journal:', jErr);
+    }
+
+    await executeQuery('DELETE FROM ARInvoiceDetails WHERE ar_invoice_id = ?', [arId]);
+    await executeQuery('DELETE FROM ARInvoices WHERE id = ?', [arId]);
     res.json({ success: true, message: 'AR Invoice berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1593,7 +2083,111 @@ app.get('/api/ar-invoices/:id', async (req, res) => {
 
 app.put('/api/ar-invoices/:id/post', async (req, res) => {
   try {
-    await executeQuery('UPDATE ARInvoices SET status = ? WHERE id = ?', ['Posted', req.params.id]);
+    const arId = req.params.id;
+    await executeQuery('UPDATE ARInvoices SET status = ? WHERE id = ?', ['Posted', arId]);
+
+    // ================== AUTOMATED JOURNAL (AR INVOICE) ==================
+    // 1. Dr Piutang / Cr Sales & VAT
+    // 2. Reversal: Dr Sales Temp / Cr Uninvoice Shipment
+    // 3. COGS: Dr COGS / Cr Inventory
+
+    try {
+      const arTradeAcc = await getGlAccount('ar_trade_account');
+      const salesAcc = await getGlAccount('sales_account');
+      const vatOutAcc = await getGlAccount('vat_out_account');
+
+      const salesTempAcc = await getGlAccount('sales_temp_account');
+      const uninvoiceShipmentAcc = await getGlAccount('uninvoice_shipment_account');
+
+      const cogsAcc = await getGlAccount('cogs_account');
+      const inventoryAcc = await getGlAccount('inventory_account');
+
+      if (arTradeAcc && salesAcc && vatOutAcc && salesTempAcc && uninvoiceShipmentAcc && cogsAcc && inventoryAcc) {
+
+        const arDoc = await executeQuery('SELECT * FROM ARInvoices WHERE id = ?', [arId]);
+        const inv = arDoc[0];
+
+        // Get Invoice Details
+        const items = await executeQuery('SELECT * FROM ARInvoiceDetails WHERE ar_invoice_id = ?', [arId]);
+
+        // Calculate Totals
+        let totalSales = 0;
+        let totalVAT = 0; // Simplified. Ideally calculate from tax_type or detail
+        // For simplicity, let's assume total_amount includes tax, and we need to derive details
+        // Or better: use item.line_total for Sales, and diff is VAT?
+        // user schema has 'tax_type' header.
+
+        // Helper calc
+        items.forEach(item => {
+          totalSales += (Number(item.quantity) * Number(item.unit_price)) || 0;
+        });
+
+        if (inv.tax_type === 'Include') {
+          totalVAT = totalSales - (totalSales / 1.11);
+          totalSales = totalSales / 1.11;
+        } else if (inv.tax_type === 'Exclude') {
+          totalVAT = totalSales * 0.11;
+        } else {
+          totalVAT = 0;
+        }
+
+        const totalAR = totalSales + totalVAT;
+
+        // Reversal Amount (Shipment Value) & COGS
+        // We need to fetch item standard cost for COGS
+        // We assume Shipment Value = Invoice Sales Value? User wants flow linkage.
+        // Actually Shipment journal was: Qty * UnitPrice (from SO). 
+        // AR Invoice usually matches SO Price. So we can use Invoice Amount for reversal too.
+        const reversalAmount = totalSales; // Assuming Uninvoiced Shipment used same value
+
+        let totalCOGS = 0;
+        // Calculate COGS using Average Cost from Purchase History
+        for (const item of items) {
+          if (item.item_id) {
+            // Priority 1: Calculate Average Cost from Approved POs
+            const avgCostResult = await executeQuery(`
+                SELECT AVG(pod.unit_price) as avg_cost 
+                FROM PurchaseOrderDetails pod
+                JOIN PurchaseOrders po ON pod.po_id = po.id
+                WHERE pod.item_id = ? AND po.status IN ('Approved', 'Closed')
+            `, [item.item_id]);
+
+            let cost = Number(avgCostResult[0]?.avg_cost);
+
+            // Priority 2: If no PO history, use Item Standard Cost
+            if (!cost || isNaN(cost)) {
+              const itemData = await executeQuery('SELECT standard_cost FROM Items WHERE id = ?', [item.item_id]);
+              cost = Number(itemData[0]?.standard_cost) || 0;
+            }
+
+            totalCOGS += (cost * Number(item.quantity));
+          }
+        }
+
+        const journalDetails = [
+          // 1. AR & Revenue
+          { coa_id: arTradeAcc, debit: totalAR, credit: 0, description: 'Accounts Receivable' },
+          { coa_id: salesAcc, debit: 0, credit: totalSales, description: 'Sales Revenue' },
+
+          // 2. Shipment Reversal
+          { coa_id: salesTempAcc, debit: reversalAmount, credit: 0, description: 'Sales Temporary Reversal' },
+          { coa_id: uninvoiceShipmentAcc, debit: 0, credit: reversalAmount, description: 'Uninvoiced Shipment Reversal' },
+
+          // 3. COGS / Inventory
+          { coa_id: cogsAcc, debit: totalCOGS, credit: 0, description: 'Cost of Goods Sold' },
+          { coa_id: inventoryAcc, debit: 0, credit: totalCOGS, description: 'Inventory' }
+        ];
+
+        if (totalVAT > 0) {
+          journalDetails.push({ coa_id: vatOutAcc, debit: 0, credit: totalVAT, description: 'VAT Out' });
+        }
+
+        await createAutomatedJournal('ARInvoice', arId, inv.doc_number, inv.doc_date, journalDetails);
+      }
+    } catch (jErr) {
+      console.error('Failed to generate AR Invoice journal:', jErr);
+    }
+
     res.json({ success: true, message: 'AR Invoice berhasil di-post' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1602,7 +2196,22 @@ app.put('/api/ar-invoices/:id/post', async (req, res) => {
 
 app.put('/api/ar-invoices/:id/unpost', async (req, res) => {
   try {
-    await executeQuery('UPDATE ARInvoices SET status = ? WHERE id = ?', ['Draft', req.params.id]);
+    const arId = req.params.id;
+    await executeQuery('UPDATE ARInvoices SET status = ? WHERE id = ?', ['Draft', arId]);
+
+    // ================== DELETE AUTOMATED JOURNAL ==================
+    try {
+      const checkJurnal = await executeQuery('SELECT id FROM JournalVouchers WHERE source_type = ? AND ref_id = ?', ['ARInvoice', arId]);
+      if (checkJurnal.length > 0) {
+        const jvId = checkJurnal[0].id;
+        await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+        await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+        console.log(`✅ Automated Journal deleted for AR Invoice #${arId}`);
+      }
+    } catch (jErr) {
+      console.error('Failed to delete AR Invoice journal:', jErr);
+    }
+
     res.json({ success: true, message: 'AR Invoice berhasil di-unpost (Kembali ke Draft)' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -2003,6 +2612,127 @@ app.get('/api/reports/po-outstanding', async (req, res) => {
 
     res.json({ success: true, data: outstandingItems });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// ==================== INVENTORY ====================
+app.post('/api/inventory/recalculate', async (req, res) => {
+  try {
+    console.log('Starting Inventory Recalculation...');
+
+    // 1. Clear existing stocks
+    await executeQuery('TRUNCATE TABLE ItemStocks');
+
+    // 2. Fetch all Approved Receivings (IN) - Ordered by Date
+    const receivings = await executeQuery(`
+      SELECT rd.item_id, rd.quantity, pod.unit_price, r.warehouse_id, r.doc_date
+      FROM ReceivingDetails rd
+      JOIN Receivings r ON rd.receiving_id = r.id
+      LEFT JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND rd.item_id = pod.item_id
+      WHERE r.status = 'Approved'
+      ORDER BY r.doc_date ASC, r.id ASC
+    `);
+
+    // 3. Fetch all Shipments (OUT) - Ordered by Date
+    const shipments = await executeQuery(`
+      SELECT sd.item_id, sd.quantity, s.warehouse_id, s.doc_date
+      FROM ShipmentDetails sd
+      JOIN Shipments s ON sd.shipment_id = s.id
+      WHERE s.status = 'Approved' OR s.status = 'Closed'
+      ORDER BY s.doc_date ASC, s.id ASC
+    `);
+
+    // Processing Logic (In-Memory for simplicity, could be optimized)
+    const stockMap = {}; // Key: item_id, Value: { totalQty: 0, totalValue: 0 }
+    const warehouseStockMap = {}; // Key: item_id-warehouse_id, Value: qty
+
+    // Process Receivings (IN) - Calculate Weighted Average Cost
+    for (const rec of receivings) {
+      if (!rec.item_id) continue;
+
+      const key = rec.item_id;
+      const wareKey = `${rec.item_id}-${rec.warehouse_id}`;
+
+      if (!stockMap[key]) stockMap[key] = { totalQty: 0, totalValue: 0 };
+      if (!warehouseStockMap[wareKey]) warehouseStockMap[wareKey] = 0;
+
+      const qty = Number(rec.quantity);
+      const cost = Number(rec.unit_price || 0);
+
+      // Add to Warehouse Stock
+      warehouseStockMap[wareKey] += qty;
+
+      // Update Global Average Cost (Simple Moving Average)
+      // Only update cost if we have valid price. If price is 0 (e.g. bonus), it dilutes cost.
+      // Logic: New Avg = ((OldQty * OldAvg) + (NewQty * NewPrice)) / (OldQty + NewQty)
+      // Here we track total Value and total Qty
+      stockMap[key].totalQty += qty;
+      stockMap[key].totalValue += (qty * cost);
+    }
+
+    // Process Shipments (OUT)
+    for (const shp of shipments) {
+      if (!shp.item_id) continue;
+
+      const key = shp.item_id;
+      const wareKey = `${shp.item_id}-${shp.warehouse_id}`;
+
+      if (!warehouseStockMap[wareKey]) warehouseStockMap[wareKey] = 0;
+      if (!stockMap[key]) stockMap[key] = { totalQty: 0, totalValue: 0 };
+
+      const qty = Number(shp.quantity);
+
+      // Deduct from Warehouse Stock
+      warehouseStockMap[wareKey] -= qty;
+
+      // Deduct from Global Total Qty (Value decreases proportionally to Avg Cost)
+      // We don't need to adjust TotalValue for Cost Calculation purpose for *future* entries if we use Moving Average 
+      // but for "Current Inventory Value" we would.
+      // For Standard Cost update, we actually care about Buying History.
+      // Shipment shouldn't change Average COST per unit, only Total Value.
+      // But if we track (Value / Qty), reducing both Qty and Value (at current avg rate) keeps Avg same.
+
+      if (stockMap[key].totalQty > 0) {
+        const currentAvg = stockMap[key].totalValue / stockMap[key].totalQty;
+        stockMap[key].totalValue -= (qty * currentAvg);
+        stockMap[key].totalQty -= qty;
+      } else {
+        stockMap[key].totalQty -= qty; // Negative stock
+      }
+    }
+
+    // 4. Update Database
+    let itemsUpdated = 0;
+
+    // Update ItemStocks table
+    for (const [wKey, qty] of Object.entries(warehouseStockMap)) {
+      const [itemId, warehouseId] = wKey.split('-');
+      // Only insert if warehouse is known
+      if (warehouseId && warehouseId !== 'null' && warehouseId !== 'undefined') {
+        await executeQuery(
+          'INSERT INTO ItemStocks (item_id, warehouse_id, quantity) VALUES (?, ?, ?)',
+          [itemId, warehouseId, qty]
+        );
+      }
+    }
+
+    // Update Items Standard Cost
+    for (const [itemId, data] of Object.entries(stockMap)) {
+      if (data.totalQty > 0) {
+        const avgCost = data.totalValue / data.totalQty;
+        // Update item standard cost
+        await executeQuery('UPDATE Items SET standard_cost = ? WHERE id = ?', [avgCost, itemId]);
+        itemsUpdated++;
+      }
+    }
+
+    console.log(`Recalculation Complete. Updated ${itemsUpdated} items costs.`);
+    res.json({ success: true, message: `Stok berhasil dihitung ulang. ${itemsUpdated} item cost telah diupdate.` });
+
+  } catch (error) {
+    console.error('Recalculate Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

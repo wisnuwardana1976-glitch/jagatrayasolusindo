@@ -197,8 +197,8 @@ function ShipmentList() {
         }
     };
 
-    const handleApprove = async (id) => {
-        if (!confirm('Approve Shipment ini? Stok akan berkurang.')) return;
+    const handlePost = async (id) => {
+        if (!confirm('Post Shipment ini? Stok akan berkurang dan jurnal terbentuk.')) return;
         try {
             const response = await fetch(`/api/shipments/${id}/approve`, { method: 'PUT' });
             const data = await response.json();
@@ -213,8 +213,8 @@ function ShipmentList() {
         }
     };
 
-    const handleUnapprove = async (id) => {
-        if (!confirm('Unapprove Shipment ini? Status kembali ke Draft.')) return;
+    const handleUnpost = async (id) => {
+        if (!confirm('Unpost Shipment ini? Status kembali ke Draft dan jurnal dihapus.')) return;
         try {
             const response = await fetch(`/api/shipments/${id}/unapprove`, { method: 'PUT' });
             const data = await response.json();
@@ -299,7 +299,6 @@ function ShipmentList() {
                                                 generateNumber(selectedTranscode.code);
                                             }
                                         }}
-                                        required
                                         required
                                         disabled={editingItem || formData.status !== 'Draft'}
                                     >
@@ -532,13 +531,13 @@ function ShipmentList() {
                                         <td style={{ textAlign: 'center' }}>
                                             {s.status === 'Draft' ? (
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleApprove(s.id)} title="Approve" style={{ color: 'green', marginRight: '5px' }}>✅</button>
+                                                    <button className="btn-icon" onClick={() => handlePost(s.id)} title="Post" style={{ color: 'green', marginRight: '5px' }}>📮</button>
                                                     <button className="btn-icon" onClick={() => handleEdit(s.id)} title="Edit" style={{ marginRight: '5px' }}>✏️</button>
                                                     <button className="btn-icon" onClick={() => handleDelete(s.id)} title="Hapus">🗑️</button>
                                                 </>
                                             ) : (
                                                 <>
-                                                    <button className="btn-icon" onClick={() => handleUnapprove(s.id)} title="Unapprove" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
+                                                    <button className="btn-icon" onClick={() => handleUnpost(s.id)} title="Unpost" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
                                                     <button className="btn-icon" onClick={() => handleEdit(s.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
                                                 </>
                                             )}

@@ -21,9 +21,13 @@ import ReceivingList from './pages/transaction/ReceivingList';
 import ShipmentList from './pages/transaction/ShipmentList';
 import APInvoiceList from './pages/transaction/APInvoiceList';
 import ARInvoiceList from './pages/transaction/ARInvoiceList';
+import AccountingPeriodList from './pages/settings/AccountingPeriodList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
 import POOutstandingReport from './pages/report/POOutstandingReport';
+import GlSettings from './pages/settings/GlSettings';
+import SystemGeneratedJournalList from './pages/finance/SystemGeneratedJournalList';
+import RecalculateInventory from './pages/inventory/RecalculateInventory';
 import './index.css';
 
 function App() {
@@ -56,8 +60,10 @@ function App() {
                 return <WarehouseList />;
             case 'sub-warehouse':
                 return <SubWarehouseList />;
-            case 'location':
-                return <LocationList />;
+            case 'accounting-period': // Added case for AccountingPeriodList
+                return <AccountingPeriodList />;
+            case 'purchase-order': // This case already exists, but the instruction implies adding it again. Keeping the existing one.
+                return <PurchaseOrderList />;
             case 'item':
                 return <ItemList />;
             case 'unit':
@@ -96,6 +102,12 @@ function App() {
                 return <PaymentTermList />;
             case 'report/po-outstanding':
                 return <POOutstandingReport />;
+            case 'gl-settings':
+                return <GlSettings />;
+            case 'system-generated-journal':
+                return <SystemGeneratedJournalList />;
+            case 'recalculate-inventory':
+                return <RecalculateInventory />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

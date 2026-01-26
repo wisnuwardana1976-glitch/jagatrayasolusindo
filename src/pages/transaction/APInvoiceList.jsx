@@ -173,7 +173,7 @@ function APInvoiceList() {
                     due_date: inv.due_date ? new Date(inv.due_date).toISOString().split('T')[0] : '',
                     transcode_id: inv.transcode_id || '',
                     partner_id: inv.partner_id || '',
-                    receiving_id: '', // Reset receiving if editing manually, or logic to fetch if stored
+                    receiving_id: inv.receiving_id || '',
                     status: inv.status,
                     notes: inv.notes || '',
                     items: inv.details.map(d => ({
@@ -188,7 +188,7 @@ function APInvoiceList() {
                     tax_type: inv.tax_type || 'Exclude'
                 });
 
-                setSourceType('manual'); // Default to manual on edit for now
+                setSourceType(inv.receiving_id ? 'receiving' : 'manual');
                 setEditingItem(id);
                 setShowForm(true);
             }
@@ -655,6 +655,7 @@ function APInvoiceList() {
                             <tr>
                                 <th>Tanggal</th>
                                 <th>No. Dokumen</th>
+                                <th>No. Receiving</th>
                                 <th>jth Tempo</th>
                                 <th>Supplier</th>
                                 <th>Status</th>
@@ -664,13 +665,14 @@ function APInvoiceList() {
                         <tbody>
                             {invoices.length === 0 ? (
                                 <tr>
-                                    <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>Belum ada AP Invoice</td>
+                                    <td colSpan="7" style={{ textAlign: 'center', padding: '2rem' }}>Belum ada AP Invoice</td>
                                 </tr>
                             ) : (
                                 invoices.map(inv => (
                                     <tr key={inv.id}>
                                         <td>{formatDate(inv.doc_date)}</td>
                                         <td><strong>{inv.doc_number}</strong></td>
+                                        <td>{inv.receiving_number || '-'}</td>
                                         <td>{inv.due_date ? formatDate(inv.due_date) : '-'}</td>
                                         <td>{inv.partner_name || '-'}</td>
                                         <td>
