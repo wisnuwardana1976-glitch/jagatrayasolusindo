@@ -2622,27 +2622,51 @@ app.post('/api/inventory/recalculate', async (req, res) => {
   try {
     console.log('Starting Inventory Recalculation...');
 
-    // 1. Clear existing stocks
-    await executeQuery('TRUNCATE TABLE ItemStocks');
+    // 1. Clear existing stocks (DELETE instead of TRUNCATE for MS Access compatibility)
+    console.log('Step 1: Clearing existing stocks...');
+    try {
+      await executeQuery('DELETE FROM ItemStocks');
+      console.log('Step 1: ✅ Complete');
+    } catch (e) {
+      console.error('Step 1 Error:', e.message);
+      throw new Error('Gagal menghapus data ItemStocks: ' + e.message);
+    }
 
     // 2. Fetch all Approved Receivings (IN) - Ordered by Date
-    const receivings = await executeQuery(`
-      SELECT rd.item_id, rd.quantity, pod.unit_price, r.warehouse_id, r.doc_date
-      FROM ReceivingDetails rd
-      JOIN Receivings r ON rd.receiving_id = r.id
-      LEFT JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND rd.item_id = pod.item_id
-      WHERE r.status = 'Approved'
-      ORDER BY r.doc_date ASC, r.id ASC
-    `);
+    console.log('Step 2: Fetching receivings...');
+    let receivings = [];
+    try {
+      receivings = await executeQuery(`
+        SELECT rd.item_id, rd.quantity, pod.unit_price, r.warehouse_id, r.doc_date
+        FROM ReceivingDetails rd
+        JOIN Receivings r ON rd.receiving_id = r.id
+        LEFT JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND rd.item_id = pod.item_id
+        WHERE r.status = 'Approved'
+        ORDER BY r.doc_date ASC, r.id ASC
+      `);
+      console.log('Step 2: ✅ Complete, found', receivings.length, 'receivings');
+    } catch (e) {
+      console.error('Step 2 Error:', e.message);
+      throw new Error('Gagal mengambil data Receiving: ' + e.message);
+    }
 
     // 3. Fetch all Shipments (OUT) - Ordered by Date
-    const shipments = await executeQuery(`
-      SELECT sd.item_id, sd.quantity, s.warehouse_id, s.doc_date
-      FROM ShipmentDetails sd
-      JOIN Shipments s ON sd.shipment_id = s.id
-      WHERE s.status = 'Approved' OR s.status = 'Closed'
-      ORDER BY s.doc_date ASC, s.id ASC
-    `);
+    console.log('Step 3: Fetching shipments...');
+    let shipments = [];
+    try {
+      shipments = await executeQuery(`
+        SELECT sd.item_id, sd.quantity, s.warehouse_id, s.doc_date
+        FROM ShipmentDetails sd
+        JOIN Shipments s ON sd.shipment_id = s.id
+        WHERE s.status = 'Approved' OR s.status = 'Closed'
+        ORDER BY s.doc_date ASC, s.id ASC
+      `);
+      console.log('Step 3: ✅ Complete, found', shipments.length, 'shipments');
+    } catch (e) {
+      console.error('Step 3 Error:', e.message);
+      throw new Error('Gagal mengambil data Shipment: ' + e.message);
+    }
+
 
     // Processing Logic (In-Memory for simplicity, could be optimized)
     const stockMap = {}; // Key: item_id, Value: { totalQty: 0, totalValue: 0 }
@@ -2704,29 +2728,53 @@ app.post('/api/inventory/recalculate', async (req, res) => {
     }
 
     // 4. Update Database
+    console.log('Step 4: Updating ItemStocks...');
     let itemsUpdated = 0;
+    let stocksInserted = 0;
+
+    // Get valid warehouse IDs from database
+    let validWarehouses = new Set();
+    try {
+      const warehouses = await executeQuery('SELECT id FROM Warehouses');
+      warehouses.forEach(w => validWarehouses.add(String(w.id)));
+      console.log('Valid warehouses:', validWarehouses.size);
+    } catch (e) {
+      console.error('Failed to fetch warehouses:', e.message);
+    }
 
     // Update ItemStocks table
     for (const [wKey, qty] of Object.entries(warehouseStockMap)) {
       const [itemId, warehouseId] = wKey.split('-');
-      // Only insert if warehouse is known
-      if (warehouseId && warehouseId !== 'null' && warehouseId !== 'undefined') {
-        await executeQuery(
-          'INSERT INTO ItemStocks (item_id, warehouse_id, quantity) VALUES (?, ?, ?)',
-          [itemId, warehouseId, qty]
-        );
+      // Only insert if warehouse is known AND exists in Warehouses table
+      if (warehouseId && warehouseId !== 'null' && warehouseId !== 'undefined' && validWarehouses.has(warehouseId)) {
+        try {
+          await executeQuery(
+            'INSERT INTO ItemStocks (item_id, warehouse_id, quantity) VALUES (?, ?, ?)',
+            [itemId, warehouseId, qty]
+          );
+          stocksInserted++;
+        } catch (insertErr) {
+          console.error(`Failed to insert stock for item ${itemId}, warehouse ${warehouseId}:`, insertErr.message);
+        }
       }
     }
+    console.log('Step 4: ✅ Complete, inserted', stocksInserted, 'stock records');
 
     // Update Items Standard Cost
+    console.log('Step 5: Updating Item Costs...');
     for (const [itemId, data] of Object.entries(stockMap)) {
       if (data.totalQty > 0) {
         const avgCost = data.totalValue / data.totalQty;
-        // Update item standard cost
-        await executeQuery('UPDATE Items SET standard_cost = ? WHERE id = ?', [avgCost, itemId]);
-        itemsUpdated++;
+        try {
+          // Update item standard cost
+          await executeQuery('UPDATE Items SET standard_cost = ? WHERE id = ?', [avgCost, itemId]);
+          itemsUpdated++;
+        } catch (updateErr) {
+          console.error(`Failed to update cost for item ${itemId}:`, updateErr.message);
+        }
       }
     }
+    console.log('Step 5: ✅ Complete, updated', itemsUpdated, 'item costs');
 
     console.log(`Recalculation Complete. Updated ${itemsUpdated} items costs.`);
     res.json({ success: true, message: `Stok berhasil dihitung ulang. ${itemsUpdated} item cost telah diupdate.` });
