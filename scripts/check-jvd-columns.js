@@ -14,10 +14,15 @@ async function run() {
         connection = await odbc.connect(connectionString);
         console.log('Connected.');
 
-        // List all tables
-        const tables = await connection.query("SELECT table_name, creator FROM SYSTABLE WHERE table_type = 'BASE'");
-        console.log('Tables found:');
-        tables.forEach(t => console.log(`${t.creator}.${t.table_name}`));
+        // Check columns from SYSCOLUMN
+        const query = `
+      SELECT column_name 
+      FROM SYSCOLUMN 
+      WHERE table_id = (SELECT table_id FROM SYSTABLE WHERE table_name = 'JournalVoucherDetails')
+    `;
+        const cols = await connection.query(query);
+        console.log('JournalVoucherDetails Columns:');
+        cols.forEach(c => console.log(c.column_name));
 
     } catch (error) {
         console.error('Error:', error);

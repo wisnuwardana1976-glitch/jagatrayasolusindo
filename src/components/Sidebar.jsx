@@ -57,6 +57,13 @@ const menuItems = [
         section: 'Laporan',
         items: [
             { id: 'report/po-outstanding', label: 'PO Outstanding', icon: 'file-text' },
+            { id: 'report/so-outstanding', label: 'SO Outstanding', icon: 'file-text' },
+            { id: 'report/receiving-outstanding', label: 'Receiving Outstanding', icon: 'file-text' },
+            { id: 'report/shipment-outstanding', label: 'Shipment Outstanding', icon: 'file-text' },
+            { id: 'report/ap-outstanding', label: 'AP Outstanding', icon: 'file-text' },
+            { id: 'report/ar-outstanding', label: 'AR Outstanding', icon: 'file-text' },
+            { id: 'report/ap-aging', label: 'AP Aging', icon: 'file-text' },
+            { id: 'report/ar-aging', label: 'AR Aging', icon: 'file-text' },
         ],
     },
     {

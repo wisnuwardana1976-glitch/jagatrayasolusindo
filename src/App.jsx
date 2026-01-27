@@ -25,6 +25,13 @@ import AccountingPeriodList from './pages/settings/AccountingPeriodList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
 import POOutstandingReport from './pages/report/POOutstandingReport';
+import SOOutstandingReport from './pages/report/SOOutstandingReport';
+import ReceivingOutstandingReport from './pages/report/ReceivingOutstandingReport';
+import ShipmentOutstandingReport from './pages/report/ShipmentOutstandingReport';
+import APOutstandingReport from './pages/report/APOutstandingReport';
+import AROutstandingReport from './pages/report/AROutstandingReport';
+import APAgingReport from './pages/report/APAgingReport';
+import ARAgingReport from './pages/report/ARAgingReport';
 import GlSettings from './pages/settings/GlSettings';
 import SystemGeneratedJournalList from './pages/finance/SystemGeneratedJournalList';
 import RecalculateInventory from './pages/inventory/RecalculateInventory';
@@ -102,6 +109,20 @@ function App() {
                 return <PaymentTermList />;
             case 'report/po-outstanding':
                 return <POOutstandingReport />;
+            case 'report/so-outstanding':
+                return <SOOutstandingReport />;
+            case 'report/receiving-outstanding':
+                return <ReceivingOutstandingReport />;
+            case 'report/shipment-outstanding':
+                return <ShipmentOutstandingReport />;
+            case 'report/ap-outstanding':
+                return <APOutstandingReport />;
+            case 'report/ar-outstanding':
+                return <AROutstandingReport />;
+            case 'report/ap-aging':
+                return <APAgingReport />;
+            case 'report/ar-aging':
+                return <ARAgingReport />;
             case 'gl-settings':
                 return <GlSettings />;
             case 'system-generated-journal':

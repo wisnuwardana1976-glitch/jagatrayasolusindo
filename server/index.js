@@ -55,7 +55,7 @@ async function executeQuery(query, params = []) {
 
 async function validatePeriod(date) {
   // Check if any period exists. If none, allow for now.
-  const allPeriods = await executeQuery('SELECT count(*) as count FROM AccountingPeriods WHERE active = "Y"');
+  const allPeriods = await executeQuery("SELECT count(*) as count FROM AccountingPeriods WHERE active = 'Y'");
   if (allPeriods[0].count === 0) return true;
 
   const result = await executeQuery(
@@ -541,11 +541,10 @@ app.delete('/api/warehouses/:id', async (req, res) => {
 app.get('/api/shipments', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT s.*, p.name as customer_name, so.doc_number as so_number, t.name as transcode_name
+      SELECT s.*, p.name as customer_name, so.doc_number as so_number
       FROM Shipments s
       LEFT JOIN Partners p ON s.partner_id = p.id
       LEFT JOIN SalesOrders so ON s.so_id = so.id
-      LEFT JOIN Transcodes t ON s.transcode_id = t.id
       ORDER BY s.doc_date DESC, s.doc_number DESC
     `);
     res.json({ success: true, data: result });
@@ -681,6 +680,13 @@ app.delete('/api/shipments/:id', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hanya dokumen Draft yang bisa dihapus' });
     }
     await executeQuery('DELETE FROM ShipmentDetails WHERE shipment_id = ?', [req.params.id]);
+
+    // Delete associated Journals (Auto Journal cleanup)
+    // 1. Delete Journal Items linked to the Journal Header
+    await executeQuery("DELETE FROM JournalVoucherDetails WHERE jv_id IN (SELECT id FROM JournalVouchers WHERE source_type = 'Shipment' AND ref_id = ?)", [req.params.id]);
+    // 2. Delete Journal Header
+    await executeQuery("DELETE FROM JournalVouchers WHERE source_type = 'Shipment' AND ref_id = ?", [req.params.id]);
+
     await executeQuery('DELETE FROM Shipments WHERE id = ?', [req.params.id]);
 
     if (result[0]?.so_id) await updateSOStatus(result[0].so_id);
@@ -1353,7 +1359,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     // Validation: Check if linked to Receiving
-    const hasReceiving = await executeQuery('SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status != "Cancelled"', [req.params.id]);
+    const hasReceiving = await executeQuery("SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status <> ?", [parseInt(req.params.id), 'Cancelled']);
     if (hasReceiving[0].count > 0) {
       // If updating details, block it.
       // For now, simpler: Block any update except Status change to 'Closed' (which might happen via system)
@@ -1394,7 +1400,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
 app.delete('/api/purchase-orders/:id', async (req, res) => {
   try {
     // Validation: Check if linked to Receiving
-    const hasReceiving = await executeQuery('SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status != "Cancelled"', [req.params.id]);
+    const hasReceiving = await executeQuery("SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status <> ?", [parseInt(req.params.id), 'Cancelled']);
     if (hasReceiving[0].count > 0) {
       return res.status(400).json({
         success: false,
@@ -1423,7 +1429,8 @@ app.put('/api/purchase-orders/:id/approve', async (req, res) => {
 app.put('/api/purchase-orders/:id/unapprove', async (req, res) => {
   try {
     // Validation: Check if linked to Receiving
-    const hasReceiving = await executeQuery('SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status != "Cancelled"', [req.params.id]);
+    console.log(`Unapproving PO ID: ${req.params.id}`);
+    const hasReceiving = await executeQuery("SELECT COUNT(*) as count FROM Receivings WHERE po_id = ? AND status <> ?", [parseInt(req.params.id), 'Cancelled']);
     if (hasReceiving[0].count > 0) {
       return res.status(400).json({
         success: false,
@@ -1551,6 +1558,16 @@ app.put('/api/sales-orders/:id/approve', async (req, res) => {
 
 app.put('/api/sales-orders/:id/unapprove', async (req, res) => {
   try {
+    // Validation: Check if linked to Shipment
+    console.log(`Unapproving SO ID: ${req.params.id}`);
+    const hasShipment = await executeQuery("SELECT COUNT(*) as count FROM Shipments WHERE so_id = ? AND status <> ?", [req.params.id, 'Cancelled']);
+    if (hasShipment[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tidak dapat meng-unapprove SO karena sudah ada dokumen Shipment yang terhubung. Hapus Shipment terlebih dahulu.'
+      });
+    }
+
     // Post: Unapprove Sales Order
     await executeQuery('UPDATE SalesOrders SET status = ? WHERE id = ?', ['Draft', req.params.id]);
     res.json({ success: true, message: 'Sales Order berhasil di-unapprove (Kembali ke Draft)' });
@@ -1973,31 +1990,41 @@ app.post('/api/ar-invoices', async (req, res) => {
   try {
     const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
 
+    console.log('AR Invoice POST - Request body:', JSON.stringify(req.body, null, 2));
+
     // Validate Accounting Period
     const isPeriodOpen = await validatePeriod(doc_date);
     if (!isPeriodOpen) {
       return res.status(400).json({ success: false, error: 'Tanggal transaksi berada di luar periode akuntansi yang sedang aktif (Open).' });
     }
 
+    console.log('Inserting AR Invoice header...');
     await executeQuery(
       'INSERT INTO ARInvoices (doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, sales_person_id, payment_term_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, due_date, partner_id, shipment_id || null, total_amount || 0, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null]
+      [doc_number, doc_date, due_date || null, partner_id, shipment_id || null, total_amount || 0, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null]
     );
+    console.log('AR Invoice header inserted successfully');
 
     const result = await executeQuery('SELECT * FROM ARInvoices WHERE doc_number = ?', [doc_number]);
     const arId = result[0]?.id;
+    console.log('AR Invoice ID:', arId);
 
     if (items && items.length > 0 && arId) {
+      console.log('Inserting', items.length, 'detail items...');
       for (const item of items) {
+        const lineTotal = (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0);
+        console.log('Inserting item:', { arId, item_id: item.item_id, description: item.description, quantity: item.quantity, unit_price: item.unit_price, lineTotal });
         await executeQuery(
           'INSERT INTO ARInvoiceDetails (ar_invoice_id, item_id, description, quantity, unit_price, line_total) VALUES (?, ?, ?, ?, ?, ?)',
-          [arId, item.item_id || null, item.description || '', item.quantity || 0, item.unit_price || 0, item.amount || 0]
+          [arId, item.item_id || null, item.description || '', parseFloat(item.quantity) || 0, parseFloat(item.unit_price) || 0, lineTotal]
         );
       }
+      console.log('All detail items inserted successfully');
     }
 
     res.json({ success: true, data: result[0], message: 'AR Invoice berhasil dibuat' });
   } catch (error) {
+    console.error('AR Invoice POST Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -2022,8 +2049,8 @@ app.put('/api/ar-invoices/:id', async (req, res) => {
     if (items && items.length > 0) {
       for (const d of items) {
         await executeQuery(
-          'INSERT INTO ARInvoiceDetails (ar_invoice_id, item_id, description, quantity, unit_price, amount, shipment_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [req.params.id, d.item_id || null, d.description || '', d.quantity || 0, d.unit_price || 0, d.amount || 0, d.shipment_id || null]
+          'INSERT INTO ARInvoiceDetails (ar_invoice_id, item_id, description, quantity, unit_price, line_total) VALUES (?, ?, ?, ?, ?, ?)',
+          [req.params.id, d.item_id || null, d.description || '', d.quantity || 0, d.unit_price || 0, (d.quantity || 0) * (d.unit_price || 0)]
         );
       }
     }
@@ -2218,20 +2245,7 @@ app.put('/api/ar-invoices/:id/unpost', async (req, res) => {
   }
 });
 
-// ==================== SHIPMENTS ====================
-app.get('/api/shipments', async (req, res) => {
-  try {
-    const result = await executeQuery(`
-        SELECT s.*, p.name as partner_name, p.code as partner_code
-        FROM Shipments s
-        LEFT JOIN Partners p ON s.partner_id = p.id
-        ORDER BY s.doc_date DESC
-      `);
-    res.json({ success: true, data: result });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+// Note: GET /api/shipments is defined earlier in the file (around line 540)
 
 app.get('/api/shipments/:id', async (req, res) => {
   try {
@@ -2655,7 +2669,7 @@ app.post('/api/inventory/recalculate', async (req, res) => {
     let shipments = [];
     try {
       shipments = await executeQuery(`
-        SELECT sd.item_id, sd.quantity, s.warehouse_id, s.doc_date
+        SELECT sd.item_id, sd.quantity, NULL as warehouse_id, s.doc_date
         FROM ShipmentDetails sd
         JOIN Shipments s ON sd.shipment_id = s.id
         WHERE s.status = 'Approved' OR s.status = 'Closed'
@@ -2781,6 +2795,349 @@ app.post('/api/inventory/recalculate', async (req, res) => {
 
   } catch (error) {
     console.error('Recalculate Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== REPORTS ====================
+app.get('/api/reports/so-outstanding', async (req, res) => {
+  try {
+    // Query tanpa HAVING - filter di JavaScript untuk kompatibilitas database yang lebih baik
+    const result = await executeQuery(`
+      SELECT 
+        so.doc_number, 
+        so.doc_date, 
+        p.name as partner_name,
+        i.code as item_code, 
+        i.name as item_name, 
+        i.unit as unit,
+        sod.quantity as qty_ordered
+      FROM SalesOrderDetails sod
+      JOIN SalesOrders so ON sod.so_id = so.id
+      JOIN Items i ON sod.item_id = i.id
+      JOIN Partners p ON so.partner_id = p.id
+      WHERE so.status IN ('Approved', 'Partial', 'Open')
+      ORDER BY so.doc_date ASC, so.doc_number ASC
+    `);
+
+    // Calculate shipped quantities separately for each item
+    const outstandingData = [];
+    for (const row of result) {
+      // Get shipped quantity for this specific SO + Item combination
+      const shippedResult = await executeQuery(`
+        SELECT COALESCE(SUM(sd.quantity), 0) as qty_shipped
+        FROM ShipmentDetails sd
+        JOIN Shipments s ON sd.shipment_id = s.id
+        JOIN SalesOrders so ON s.so_id = so.id
+        WHERE so.doc_number = ? AND sd.item_id = (SELECT id FROM Items WHERE code = ?) AND s.status IN ('Approved', 'Closed')
+      `, [row.doc_number, row.item_code]);
+
+      const qty_shipped = Number(shippedResult[0]?.qty_shipped) || 0;
+      const qty_ordered = Number(row.qty_ordered) || 0;
+      const qty_outstanding = qty_ordered - qty_shipped;
+
+      if (qty_outstanding > 0) {
+        outstandingData.push({
+          doc_number: row.doc_number,
+          doc_date: row.doc_date,
+          partner_name: row.partner_name,
+          item_code: row.item_code,
+          item_name: row.item_name,
+          unit: row.unit,
+          qty_ordered: qty_ordered,
+          qty_shipped: qty_shipped,
+          qty_outstanding: qty_outstanding
+        });
+      }
+    }
+
+    res.json({ success: true, data: outstandingData });
+  } catch (error) {
+    console.error('Error fetching SO Outstanding report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== RECEIVING OUTSTANDING REPORT ====================
+// Receiving yang belum dibuat AP Invoice
+app.get('/api/reports/receiving-outstanding', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        r.id,
+        r.doc_number,
+        r.doc_date,
+        r.status,
+        p.name as partner_name,
+        po.doc_number as po_number,
+        (
+          SELECT SUM(rd.quantity * COALESCE(pod.unit_price, 0))
+          FROM ReceivingDetails rd
+          LEFT JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND rd.item_id = pod.item_id
+          WHERE rd.receiving_id = r.id
+        ) as total_amount
+      FROM Receivings r
+      LEFT JOIN Partners p ON r.partner_id = p.id
+      LEFT JOIN PurchaseOrders po ON r.po_id = po.id
+      WHERE r.status = 'Approved'
+        AND r.id NOT IN (SELECT COALESCE(receiving_id, 0) FROM APInvoices WHERE receiving_id IS NOT NULL)
+      ORDER BY r.doc_date ASC
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching Receiving Outstanding report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== SHIPMENT OUTSTANDING REPORT ====================
+// Shipment yang belum dibuat AR Invoice
+app.get('/api/reports/shipment-outstanding', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        s.id,
+        s.doc_number,
+        s.doc_date,
+        s.status,
+        p.name as partner_name,
+        so.doc_number as so_number,
+        (
+          SELECT SUM(sd.quantity * COALESCE(sod.unit_price, 0))
+          FROM ShipmentDetails sd
+          LEFT JOIN SalesOrderDetails sod ON s.so_id = sod.so_id AND sd.item_id = sod.item_id
+          WHERE sd.shipment_id = s.id
+        ) as total_amount
+      FROM Shipments s
+      LEFT JOIN Partners p ON s.partner_id = p.id
+      LEFT JOIN SalesOrders so ON s.so_id = so.id
+      WHERE s.status IN ('Approved', 'Closed')
+        AND s.id NOT IN (SELECT COALESCE(shipment_id, 0) FROM ARInvoices WHERE shipment_id IS NOT NULL)
+      ORDER BY s.doc_date ASC
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching Shipment Outstanding report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== AP OUTSTANDING REPORT ====================
+// Hutang yang belum dibayar (AP Invoice Posted)
+app.get('/api/reports/ap-outstanding', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        ap.id,
+        ap.doc_number,
+        ap.doc_date,
+        ap.due_date,
+        ap.status,
+        p.name as partner_name,
+        (
+          SELECT SUM(d.quantity * d.unit_price)
+          FROM APInvoiceDetails d
+          WHERE d.ap_invoice_id = ap.id
+        ) as total_amount
+      FROM APInvoices ap
+      LEFT JOIN Partners p ON ap.partner_id = p.id
+      WHERE ap.status = 'Posted'
+      ORDER BY ap.due_date ASC, ap.doc_date ASC
+    `);
+
+    // Calculate days overdue
+    const today = new Date();
+    const dataWithAging = result.map(item => {
+      const dueDate = item.due_date ? new Date(item.due_date) : null;
+      let daysOverdue = 0;
+      if (dueDate && dueDate < today) {
+        daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+      }
+      return { ...item, days_overdue: daysOverdue };
+    });
+
+    res.json({ success: true, data: dataWithAging });
+  } catch (error) {
+    console.error('Error fetching AP Outstanding report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== AR OUTSTANDING REPORT ====================
+// Piutang yang belum dibayar (AR Invoice Posted)
+app.get('/api/reports/ar-outstanding', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        ar.id,
+        ar.doc_number,
+        ar.doc_date,
+        ar.due_date,
+        ar.status,
+        p.name as partner_name,
+        (
+          SELECT SUM(d.quantity * d.unit_price)
+          FROM ARInvoiceDetails d
+          WHERE d.ar_invoice_id = ar.id
+        ) as total_amount
+      FROM ARInvoices ar
+      LEFT JOIN Partners p ON ar.partner_id = p.id
+      WHERE ar.status = 'Posted'
+      ORDER BY ar.due_date ASC, ar.doc_date ASC
+    `);
+
+    // Calculate days overdue
+    const today = new Date();
+    const dataWithAging = result.map(item => {
+      const dueDate = item.due_date ? new Date(item.due_date) : null;
+      let daysOverdue = 0;
+      if (dueDate && dueDate < today) {
+        daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+      }
+      return { ...item, days_overdue: daysOverdue };
+    });
+
+    res.json({ success: true, data: dataWithAging });
+  } catch (error) {
+    console.error('Error fetching AR Outstanding report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== AP AGING REPORT ====================
+// Analisis umur hutang
+app.get('/api/reports/ap-aging', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        ap.id,
+        ap.doc_number,
+        ap.doc_date,
+        ap.due_date,
+        p.name as partner_name,
+        p.id as partner_id,
+        (
+          SELECT SUM(d.quantity * d.unit_price)
+          FROM APInvoiceDetails d
+          WHERE d.ap_invoice_id = ap.id
+        ) as total_amount
+      FROM APInvoices ap
+      LEFT JOIN Partners p ON ap.partner_id = p.id
+      WHERE ap.status = 'Posted'
+      ORDER BY p.name ASC, ap.due_date ASC
+    `);
+
+    // Calculate aging buckets
+    const today = new Date();
+    const dataWithAging = result.map(item => {
+      const dueDate = item.due_date ? new Date(item.due_date) : new Date(item.doc_date);
+      const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+      const amount = Number(item.total_amount) || 0;
+
+      let bucket = 'current';
+      let current = 0, days1_30 = 0, days31_60 = 0, days61_90 = 0, days90plus = 0;
+
+      if (daysOverdue <= 0) {
+        bucket = 'current';
+        current = amount;
+      } else if (daysOverdue <= 30) {
+        bucket = '1-30';
+        days1_30 = amount;
+      } else if (daysOverdue <= 60) {
+        bucket = '31-60';
+        days31_60 = amount;
+      } else if (daysOverdue <= 90) {
+        bucket = '61-90';
+        days61_90 = amount;
+      } else {
+        bucket = '>90';
+        days90plus = amount;
+      }
+
+      return {
+        ...item,
+        days_overdue: daysOverdue,
+        bucket,
+        current,
+        days1_30,
+        days31_60,
+        days61_90,
+        days90plus
+      };
+    });
+
+    res.json({ success: true, data: dataWithAging });
+  } catch (error) {
+    console.error('Error fetching AP Aging report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== AR AGING REPORT ====================
+// Analisis umur piutang
+app.get('/api/reports/ar-aging', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        ar.id,
+        ar.doc_number,
+        ar.doc_date,
+        ar.due_date,
+        p.name as partner_name,
+        p.id as partner_id,
+        (
+          SELECT SUM(d.quantity * d.unit_price)
+          FROM ARInvoiceDetails d
+          WHERE d.ar_invoice_id = ar.id
+        ) as total_amount
+      FROM ARInvoices ar
+      LEFT JOIN Partners p ON ar.partner_id = p.id
+      WHERE ar.status = 'Posted'
+      ORDER BY p.name ASC, ar.due_date ASC
+    `);
+
+    // Calculate aging buckets
+    const today = new Date();
+    const dataWithAging = result.map(item => {
+      const dueDate = item.due_date ? new Date(item.due_date) : new Date(item.doc_date);
+      const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+      const amount = Number(item.total_amount) || 0;
+
+      let bucket = 'current';
+      let current = 0, days1_30 = 0, days31_60 = 0, days61_90 = 0, days90plus = 0;
+
+      if (daysOverdue <= 0) {
+        bucket = 'current';
+        current = amount;
+      } else if (daysOverdue <= 30) {
+        bucket = '1-30';
+        days1_30 = amount;
+      } else if (daysOverdue <= 60) {
+        bucket = '31-60';
+        days31_60 = amount;
+      } else if (daysOverdue <= 90) {
+        bucket = '61-90';
+        days61_90 = amount;
+      } else {
+        bucket = '>90';
+        days90plus = amount;
+      }
+
+      return {
+        ...item,
+        days_overdue: daysOverdue,
+        bucket,
+        current,
+        days1_30,
+        days31_60,
+        days61_90,
+        days90plus
+      };
+    });
+
+    res.json({ success: true, data: dataWithAging });
+  } catch (error) {
+    console.error('Error fetching AR Aging report:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

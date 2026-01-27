@@ -14,10 +14,9 @@ async function run() {
         connection = await odbc.connect(connectionString);
         console.log('Connected.');
 
-        // List all tables
-        const tables = await connection.query("SELECT table_name, creator FROM SYSTABLE WHERE table_type = 'BASE'");
-        console.log('Tables found:');
-        tables.forEach(t => console.log(`${t.creator}.${t.table_name}`));
+        // Check columns
+        const cols = await connection.query("SELECT TOP 1 * FROM JournalVouchers");
+        console.log('JournalVouchers Columns:', Object.keys(cols[0] || {}));
 
     } catch (error) {
         console.error('Error:', error);
