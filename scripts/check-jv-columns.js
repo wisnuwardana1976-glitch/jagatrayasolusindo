@@ -1,22 +1,28 @@
-import odbc from 'odbc';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '../.env') });
+import dotenv from 'dotenv';
+import odbc from 'odbc';
+import path from 'path';
+
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const connectionString = `Driver={SQL Anywhere 17};Host=${process.env.DB_HOST}:${process.env.DB_PORT};DatabaseName=${process.env.DB_NAME};UID=${process.env.DB_USER};PWD=${process.env.DB_PASSWORD}`;
 
-async function run() {
+async function checkColumns() {
     let connection;
     try {
         connection = await odbc.connect(connectionString);
-        console.log('Connected.');
 
-        // Check columns
-        const cols = await connection.query("SELECT TOP 1 * FROM JournalVouchers");
-        console.log('JournalVouchers Columns:', Object.keys(cols[0] || {}));
+        console.log('Connected to DB.');
+
+        const result = await connection.query(`
+            SELECT cname, coltype, length, syslength
+            FROM sys.syscolumns 
+            WHERE tname = 'JournalVouchers'
+        `);
+
+        console.log('=== JournalVouchers Columns ===');
+        console.table(result); // console.table might not show in run_command output well, better iterating
+        result.forEach(r => console.log(`${r.cname}: ${r.coltype} (len: ${r.length})`));
 
     } catch (error) {
         console.error('Error:', error);
@@ -25,4 +31,4 @@ async function run() {
     }
 }
 
-run();
+checkColumns();

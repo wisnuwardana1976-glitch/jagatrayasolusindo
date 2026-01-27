@@ -970,6 +970,241 @@ app.get('/api/journals/:id', async (req, res) => {
   }
 });
 
+// Get Outstanding Invoices (AP/AR)
+app.get('/api/invoices/outstanding', async (req, res) => {
+  try {
+    const { type } = req.query; // 'AP' or 'AR'
+    if (!type || (type !== 'AP' && type !== 'AR')) {
+      return res.status(400).json({ success: false, error: 'Invalid type. Use AP or AR.' });
+    }
+
+    const table = type === 'AP' ? 'APInvoices' : 'ARInvoices';
+
+    const query = `
+      SELECT i.id, i.doc_number, i.doc_date, i.total_amount, i.paid_amount, (i.total_amount - i.paid_amount) as balance, 
+             p.name as partner_name, i.partner_id
+      FROM ${table} i
+      LEFT JOIN Partners p ON i.partner_id = p.id
+      WHERE i.status IN ('Posted', 'Partial') 
+      AND (i.total_amount - i.paid_amount) > 0
+      ORDER BY i.doc_date ASC
+    `;
+
+    const result = await executeQuery(query);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching outstanding invoices:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create Journal Voucher (Manual)
+app.post('/api/journals', async (req, res) => {
+  try {
+    const { doc_number, doc_date, description, transcode_id, details, is_giro, giro_number, giro_due_date } = req.body;
+
+    // Basic validation
+    let totalDebit = 0;
+    let totalCredit = 0;
+    details.forEach(d => {
+      totalDebit += parseFloat(d.debit) || 0;
+      totalCredit += parseFloat(d.credit) || 0;
+    });
+
+    if (Math.abs(totalDebit - totalCredit) > 0.01) { // Allowing small float diff
+      return res.status(400).json({ success: false, error: 'Total Debit and Credit must be equal (Balanced).' });
+    }
+
+    const docNum = doc_number === 'AUTO' ? `JV/${new Date().getTime()}` : String(doc_number);
+
+    const p_is_giro = is_giro ? 1 : 0;
+    const p_giro_number = giro_number ? String(giro_number) : null;
+    const p_giro_due_date = giro_due_date ? String(giro_due_date) : null;
+    const p_giro_bank_name = req.body.giro_bank_name ? String(req.body.giro_bank_name) : null;
+
+    const params = [docNum, String(doc_date), String(description), parseInt(transcode_id), p_is_giro, p_giro_number, p_giro_due_date, p_giro_bank_name];
+    // logDebug(`Insert Params: ${JSON.stringify(params)}`);
+
+    const result = await executeQuery(
+      `INSERT INTO JournalVouchers (doc_number, doc_date, description, status, transcode_id, source_type, is_giro, giro_number, giro_due_date, giro_bank_name) 
+       VALUES (?, ?, ?, 'Draft', ?, 'MANUAL', ?, ?, ?, ?)`,
+      params
+    );
+
+    const jvId = result.insertId || (await executeQuery('SELECT @@IDENTITY')).id || (await executeQuery('SELECT MAX(id) from JournalVouchers'))[0]['MAX(id)'];
+
+    for (const det of details) {
+      const refId = det.ref_id ? parseInt(det.ref_id) : null;
+      const refType = det.ref_type ? String(det.ref_type) : null;
+
+      await executeQuery(
+        `INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit, ref_id, ref_type) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [jvId, det.coa_id, det.description || '', det.debit, det.credit, refId, refType]
+      );
+
+      // Allocation Update
+      if (refId && refType) {
+        const table = refType === 'AP' ? 'APInvoices' : (refType === 'AR' ? 'ARInvoices' : null);
+        if (table) {
+          const amount = parseFloat(det.debit) || parseFloat(det.credit) || 0; // Simplified. Logic: Payment reduces balance.
+          // For AP Payment (Cash Out), we Debit AP Account. So amount is det.debit.
+          // For AR Receipt (Cash In), we Credit AR Account. So amount is det.credit.
+          // We'll trust the amount passed is the reduction amount.
+
+          await executeQuery(`UPDATE ${table} SET paid_amount = paid_amount + ? WHERE id = ?`, [amount, refId]);
+          // Update status if Paid
+          await executeQuery(`UPDATE ${table} SET status = 'Paid' WHERE id = ? AND paid_amount >= total_amount`, [refId]);
+          // Update status if Partial
+          await executeQuery(`UPDATE ${table} SET status = 'Partial' WHERE id = ? AND paid_amount < total_amount AND paid_amount > 0`, [refId]);
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'Journal created successfully', id: jvId, doc_number: docNum });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Update Journal Voucher
+app.put('/api/journals/:id', async (req, res) => {
+  try {
+    const { doc_date, description, details, is_giro, giro_number, giro_due_date } = req.body;
+    const jvId = req.params.id;
+
+    // Check status
+    const current = await executeQuery('SELECT status FROM JournalVouchers WHERE id = ?', [jvId]);
+    if (current.length === 0) return res.status(404).json({ success: false, error: 'Journal not found' });
+    if (current[0].status !== 'Draft') return res.status(400).json({ success: false, error: 'Cannot edit posted journal' });
+
+    // Validate Balance
+    let totalDebit = 0;
+    let totalCredit = 0;
+    details.forEach(d => {
+      totalDebit += parseFloat(d.debit) || 0;
+      totalCredit += parseFloat(d.credit) || 0;
+    });
+
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      return res.status(400).json({ success: false, error: 'Total Debit and Credit must be equal.' });
+    }
+
+    // Update Header
+    const p_is_giro = is_giro ? 1 : 0;
+    const p_giro_number = giro_number ? String(giro_number) : null;
+    const p_giro_due_date = giro_due_date ? String(giro_due_date) : null;
+    const p_giro_bank_name = req.body.giro_bank_name ? String(req.body.giro_bank_name) : null;
+
+    await executeQuery(
+      'UPDATE JournalVouchers SET doc_date = ?, description = ?, is_giro = ?, giro_number = ?, giro_due_date = ?, giro_bank_name = ? WHERE id = ?',
+      [String(doc_date), String(description), p_is_giro, p_giro_number, p_giro_due_date, p_giro_bank_name, req.params.id]
+    );
+
+    // Revert Allocation from Old Details
+    const oldDetails = await executeQuery('SELECT ref_id, ref_type, debit, credit FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+    for (const old of oldDetails) {
+      if (old.ref_id && old.ref_type) {
+        const table = old.ref_type === 'AP' ? 'APInvoices' : (old.ref_type === 'AR' ? 'ARInvoices' : null);
+        if (table) {
+          const amount = parseFloat(old.debit) || parseFloat(old.credit) || 0;
+          await executeQuery(`UPDATE ${table} SET paid_amount = paid_amount - ? WHERE id = ?`, [amount, old.ref_id]);
+          // Revert status to Posted (or Partial)
+          // If paid_amount becomes < total but > 0 -> Partial. If <= 0 -> Posted.
+          // We'll simplisticly set to Posted if currently Paid. The insert loop will re-check.
+          // Better: check logic.
+          await executeQuery(`UPDATE ${table} SET status = 'Posted' WHERE id = ? AND paid_amount <= 0`, [old.ref_id]);
+          await executeQuery(`UPDATE ${table} SET status = 'Partial' WHERE id = ? AND paid_amount > 0 AND paid_amount < total_amount`, [old.ref_id]);
+          // If it remains paid? (e.g. overpayment revert). Logic handles it.
+        }
+      }
+    }
+
+    // Delete existing details
+    await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+
+    // Insert new details
+    for (const det of details) {
+      const refId = det.ref_id ? parseInt(det.ref_id) : null;
+      const refType = det.ref_type ? String(det.ref_type) : null;
+
+      await executeQuery(
+        `INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit, ref_id, ref_type) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [jvId, det.coa_id, det.description || '', det.debit, det.credit, refId, refType]
+      );
+
+      // Allocation Update (New)
+      if (refId && refType) {
+        const table = refType === 'AP' ? 'APInvoices' : (refType === 'AR' ? 'ARInvoices' : null);
+        if (table) {
+          const amount = parseFloat(det.debit) || parseFloat(det.credit) || 0;
+          await executeQuery(`UPDATE ${table} SET paid_amount = paid_amount + ? WHERE id = ?`, [amount, refId]);
+          await executeQuery(`UPDATE ${table} SET status = 'Paid' WHERE id = ? AND paid_amount >= total_amount`, [refId]);
+          await executeQuery(`UPDATE ${table} SET status = 'Partial' WHERE id = ? AND paid_amount < total_amount AND paid_amount > 0`, [refId]);
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'Journal updated successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete Journal Voucher
+app.delete('/api/journals/:id', async (req, res) => {
+  try {
+    const jvId = req.params.id;
+    const current = await executeQuery('SELECT status FROM JournalVouchers WHERE id = ?', [jvId]);
+    if (current.length === 0) return res.status(404).json({ success: false, error: 'Journal not found' });
+    if (current[0].status !== 'Draft') return res.status(400).json({ success: false, error: 'Cannot delete posted journal' });
+
+    // Revert Allocation
+    const oldDetails = await executeQuery('SELECT ref_id, ref_type, debit, credit FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+    for (const old of oldDetails) {
+      if (old.ref_id && old.ref_type) {
+        const table = old.ref_type === 'AP' ? 'APInvoices' : (old.ref_type === 'AR' ? 'ARInvoices' : null);
+        if (table) {
+          const amount = parseFloat(old.debit) || parseFloat(old.credit) || 0;
+          await executeQuery(`UPDATE ${table} SET paid_amount = paid_amount - ? WHERE id = ?`, [amount, old.ref_id]);
+          await executeQuery(`UPDATE ${table} SET status = 'Posted' WHERE id = ? AND paid_amount <= 0`, [old.ref_id]);
+          await executeQuery(`UPDATE ${table} SET status = 'Partial' WHERE id = ? AND paid_amount > 0 AND paid_amount < total_amount`, [old.ref_id]);
+        }
+      }
+    }
+
+    await executeQuery('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+    await executeQuery('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+
+    res.json({ success: true, message: 'Journal deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Post Journal Voucher
+app.put('/api/journals/:id/post', async (req, res) => {
+  try {
+    const jvId = req.params.id;
+    await executeQuery("UPDATE JournalVouchers SET status = 'Posted' WHERE id = ?", [jvId]);
+    res.json({ success: true, message: 'Journal posted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Unpost Journal Voucher
+app.put('/api/journals/:id/unpost', async (req, res) => {
+  try {
+    const jvId = req.params.id;
+    await executeQuery("UPDATE JournalVouchers SET status = 'Draft' WHERE id = ?", [jvId]);
+    res.json({ success: true, message: 'Journal unposted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== GL SETTINGS ====================
 app.get('/api/gl-settings', async (req, res) => {
   try {

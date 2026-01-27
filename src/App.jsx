@@ -34,6 +34,9 @@ import APAgingReport from './pages/report/APAgingReport';
 import ARAgingReport from './pages/report/ARAgingReport';
 import GlSettings from './pages/settings/GlSettings';
 import SystemGeneratedJournalList from './pages/finance/SystemGeneratedJournalList';
+import CashList from './pages/finance/CashList';
+import BankList from './pages/finance/BankList';
+import JournalVoucherList from './pages/finance/JournalVoucherList';
 import RecalculateInventory from './pages/inventory/RecalculateInventory';
 import './index.css';
 
@@ -129,6 +132,16 @@ function App() {
                 return <SystemGeneratedJournalList />;
             case 'recalculate-inventory':
                 return <RecalculateInventory />;
+            case 'cash-in':
+                return <CashList transactionType="IN" />;
+            case 'cash-out':
+                return <CashList transactionType="OUT" />;
+            case 'bank-in':
+                return <BankList transactionType="IN" />;
+            case 'bank-out':
+                return <BankList transactionType="OUT" />;
+            case 'journal-voucher':
+                return <JournalVoucherList />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

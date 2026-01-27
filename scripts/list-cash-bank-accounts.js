@@ -6,14 +6,13 @@ dotenv.config();
 
 const connectionString = `Driver={SQL Anywhere 17};Host=${process.env.DB_HOST}:${process.env.DB_PORT};DatabaseName=${process.env.DB_NAME};UID=${process.env.DB_USER};PWD=${process.env.DB_PASSWORD}`;
 
-async function listTables() {
+async function listAccounts() {
     let connection;
     try {
-        console.log('Connecting to database...');
         connection = await odbc.connect(connectionString);
 
-        const tables = await connection.query("SELECT table_name FROM SYSTABLE WHERE creator = 1 ORDER BY table_name");
-        console.log('Tables:', tables.map(t => t.table_name));
+        const accounts = await connection.query("SELECT id, code, name FROM Accounts WHERE name LIKE '%Kas%' OR name LIKE '%Bank%' OR name LIKE '%Cash%' ORDER BY code");
+        console.log(JSON.stringify(accounts, null, 2));
 
     } catch (error) {
         console.error('Error:', error.message);
@@ -24,4 +23,4 @@ async function listTables() {
     }
 }
 
-listTables();
+listAccounts();

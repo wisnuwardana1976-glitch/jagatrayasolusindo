@@ -69,8 +69,10 @@ const menuItems = [
     {
         section: 'Keuangan',
         items: [
-            { id: 'cash', label: 'Cash', icon: 'dollar-sign' },
-            { id: 'bank', label: 'Bank', icon: 'credit-card' },
+            { id: 'cash-in', label: 'Kas Masuk', icon: 'dollar-sign' },
+            { id: 'cash-out', label: 'Kas Keluar', icon: 'dollar-sign' },
+            { id: 'bank-in', label: 'Bank Masuk', icon: 'credit-card' },
+            { id: 'bank-out', label: 'Bank Keluar', icon: 'credit-card' },
             { id: 'journal-voucher', label: 'Jurnal Voucher', icon: 'book-open' },
             { id: 'system-generated-journal', label: 'Auto Journal', icon: 'file-text' },
         ],
