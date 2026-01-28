@@ -9,7 +9,8 @@ function CashList({ transactionType }) {
 
     // Available transcodes for selection
     const [availableTranscodes, setAvailableTranscodes] = useState([]);
-    const [outstandingInvoices, setOutstandingInvoices] = useState([]); // New state
+    const [outstandingAp, setOutstandingAp] = useState([]);
+    const [outstandingAr, setOutstandingAr] = useState([]);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -138,12 +139,16 @@ function CashList({ transactionType }) {
 
     const fetchOutstandingInvoices = async () => {
         try {
-            const type = formData.type === 'OUT' ? 'AP' : 'AR';
-            const response = await fetch(`/api/invoices/outstanding?type=${type}`);
-            const result = await response.json();
-            if (result.success) {
-                setOutstandingInvoices(result.data);
-            }
+            const [apRes, arRes] = await Promise.all([
+                fetch('/api/invoices/outstanding?type=AP'),
+                fetch('/api/invoices/outstanding?type=AR')
+            ]);
+
+            const apData = await apRes.json();
+            const arData = await arRes.json();
+
+            if (apData.success) setOutstandingAp(apData.data);
+            if (arData.success) setOutstandingAr(arData.data);
         } catch (error) {
             console.error('Error fetching invoices:', error);
         }
@@ -217,11 +222,21 @@ function CashList({ transactionType }) {
 
         // Allocation Logic
         if (field === 'ref_id' && value) {
-            const inv = outstandingInvoices.find(i => i.id === parseInt(value));
+            // Find in either list
+            const inv = outstandingAp.find(i => i.id === parseInt(value)) || outstandingAr.find(i => i.id === parseInt(value));
             if (inv) {
                 newDetails[index]['amount'] = inv.balance;
                 newDetails[index]['description'] = `Payment for ${inv.doc_number}`;
-                newDetails[index]['ref_type'] = formData.type === 'OUT' ? 'AP' : 'AR';
+
+                // Determine Ref Type based on which list it was found in logic
+                // But better to rely on Line context (Hutang vs Piutang)
+                const coaId = newDetails[index]['coa_id'];
+                const selectedAcc = accounts.find(a => a.id === parseInt(coaId));
+                let type = '';
+                if (selectedAcc?.name.toLowerCase().includes('hutang')) type = 'AP';
+                else if (selectedAcc?.name.toLowerCase().includes('piutang')) type = 'AR';
+
+                newDetails[index]['ref_type'] = type;
 
                 // Set partner_id if not set
                 if (inv.partner_id && !newDetails[index]['partner_id']) {
@@ -233,6 +248,7 @@ function CashList({ transactionType }) {
         setFormData({ ...formData, details: newDetails });
     };
 
+    // Update handleSubmit to handle Edit (PUT)
     const handleSubmit = async (e) => {
         e.preventDefault();
 
@@ -253,18 +269,23 @@ function CashList({ transactionType }) {
             return;
         }
 
+        // Prepare details for POST/PUT
         const journalDetails = [];
 
-        // 1. Contra lines
+        // 1. Contra lines (User inputs)
         formData.details.forEach(d => {
             const amt = parseFloat(d.amount) || 0;
             if (amt > 0) {
-                journalDetails.push({
+                const det = {
                     coa_id: d.coa_id,
                     description: d.description || formData.description,
                     debit: formData.type === 'OUT' ? amt : 0,
-                    credit: formData.type === 'IN' ? amt : 0
-                });
+                    credit: formData.type === 'IN' ? amt : 0,
+                    // Pass allocation info
+                    ref_id: d.ref_id || null,
+                    ref_type: d.ref_type || null
+                };
+                journalDetails.push(det);
             }
         });
 
@@ -281,27 +302,192 @@ function CashList({ transactionType }) {
             doc_date: formData.doc_date,
             description: formData.description,
             transcode_id: parseInt(formData.transcode_id),
-            source_type: 'MANUAL',
-            details: journalDetails
+            source_type: 'MANUAL', // Always manual for this form
+            details: journalDetails,
+            is_giro: formData.is_giro ? 1 : 0,
+            giro_number: formData.giro_number,
+            giro_due_date: formData.giro_due_date,
+            giro_bank_name: formData.giro_bank_name || null
         };
 
         try {
-            const response = await fetch('/api/journals', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            const data = await response.json();
-            if (data.success) {
-                alert(data.message);
-                setShowForm(false);
-                fetchJournals();
+            let response;
+            if (formData.id) {
+                // Update
+                response = await fetch(`/api/journals/${formData.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
             } else {
-                alert('Error: ' + data.error);
+                // Create
+                response = await fetch('/api/journals', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            }
+
+            const result = await response.json();
+            if (result.success) {
+                alert(formData.id ? 'Transaksi berhasil diupdate' : 'Transaksi berhasil dikirim');
+                setShowForm(false);
+                loadData();
+            } else {
+                alert('Gagal menyimpan: ' + result.error);
             }
         } catch (error) {
-            alert('Error: ' + error.message);
+            console.error('Error saving journal:', error);
+            alert('Terjadi kesalahan saat menyimpan transaksi.');
+        }
+    };
+
+    const handleEdit = async (journal) => {
+        try {
+            setLoading(true);
+            const response = await fetch(`/api/journals/${journal.id}`);
+            const result = await response.json();
+
+            if (result.success) {
+                const data = result.data;
+
+                // Parse details to match form structure
+                // Form expects "Contra" lines. Backend returns all lines (including Main).
+                // We need to identify Main Account line vs Contra lines.
+                // In generic Journal, it's hard. But for Cash Transaction, we assume:
+                // Main Line = Line matching main_account_id (or logic based on Type)
+
+                // Let's find the Main Line.
+                // For Cash IN: Main is DEBIT. Contra is CREDIT.
+                // For Cash OUT: Main is CREDIT. Contra is DEBIT.
+
+                // However, we stored main_account_id in local state 'cashAccounts'.
+                // Ideally we find the line that matches one of 'cashAccounts' AND matches the logic direction.
+
+                // Simplification for now:
+                // Find line with largest Value matching Type direction?
+                // Or just filter out the main line if we can identify it.
+
+                // Let's rely on what we saved. We saved Main line at the end usually. 
+                // But DB order isn't guaranteed.
+
+                // Strategy:
+                // 1. Identify Main Account ID from the journal lines that is in `cashAccounts`.
+                // 2. Set that as `main_account_id`.
+                // 3. Set remaining lines as `details`.
+
+                let mainAccId = '';
+                const details = [];
+                const type = transactionType; // Current view context (IN/OUT)
+
+                // Find potential main account
+                const cashIds = cashAccounts.map(c => c.id);
+                const mainLine = data.details.find(d => cashIds.includes(d.coa_id));
+
+                if (mainLine) {
+                    mainAccId = mainLine.coa_id;
+                }
+
+                // Rest are details
+                data.details.forEach(d => {
+                    if (d.id === mainLine?.id) return; // Skip main line
+
+                    // Determine amount
+                    const amt = parseFloat(d.debit) || parseFloat(d.credit);
+                    if (amt > 0) {
+                        details.push({
+                            coa_id: d.coa_id,
+                            description: d.description,
+                            amount: amt,
+                            ref_id: d.ref_id || '',
+                            ref_type: d.ref_type || '', // AP/AR
+                            partner_id: '' // Need to infer? Or API should return it? API returns ref_type/id.
+                            // We can re-fetch partner from ref_id logic or leave blank if lazy.
+                            // Better: The 'ref_type/ref_id' logic in handleLineChange sets it. 
+                            // But here we need to populate it for the dropdown to work.
+                            // If ref_id exists, we can try to find it in outstanding lists? 
+                            // Issue: Paid invoices are NOT in outstanding list anymore.
+                            // So we can't show them in dropdown if we filter by "Outstanding".
+                        });
+                    }
+                });
+
+                // If editing a PAID transaction, the invoice is no longer "Outstanding".
+                // So our "Period" / "Outstanding" dropdown won't show it.
+                // This is a common issue. 
+                // Fix: Fetch the specific Invoice info if ref_id exists?
+                // Or just leave it as text?
+                // For now, let's load what we can.
+
+                setFormData({
+                    id: data.id,
+                    doc_number: data.doc_number,
+                    doc_date: new Date(data.doc_date).toISOString().split('T')[0],
+                    description: data.description,
+                    type: type, // Keep context
+                    transcode_id: data.transcode_id,
+                    main_account_id: mainAccId,
+                    details: details,
+                    is_giro: data.is_giro === 1,
+                    giro_number: data.giro_number || '',
+                    giro_due_date: data.giro_due_date ? new Date(data.giro_due_date).toISOString().split('T')[0] : '',
+                    giro_bank_name: data.giro_bank_name || ''
+                });
+
+                setShowForm(true);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error fetching details:', error);
+            setLoading(false);
+        }
+    };
+
+    const handleDelete = async (id) => {
+        if (!confirm('Apakah Anda yakin ingin menghapus transaksi ini?')) return;
+        try {
+            const response = await fetch(`/api/journals/${id}`, { method: 'DELETE' });
+            const result = await response.json();
+            if (result.success) {
+                loadData();
+            } else {
+                alert('Gagal menghapus: ' + result.error);
+            }
+        } catch (error) {
+            console.error(error);
+            alert('Terjadi kesalahan saat menghapus.');
+        }
+    };
+
+    const handleApprove = async (id) => {
+        if (!confirm('Apakah Anda yakin ingin memposting transaksi ini? Status akan menjadi Posted dan tidak bisa diedit lagi.')) return;
+        try {
+            const response = await fetch(`/api/journals/${id}/post`, { method: 'PUT' });
+            const result = await response.json();
+            if (result.success) {
+                loadData();
+            } else {
+                alert('Gagal memposting: ' + result.error);
+            }
+        } catch (error) {
+            console.error(error);
+            alert('Terjadi kesalahan saat memposting.');
+        }
+    };
+
+    const handleUnpost = async (id) => {
+        if (!confirm('Apakah Anda yakin ingin membatalkan posting transaksi ini? Status akan kembali menjadi Draft.')) return;
+        try {
+            const response = await fetch(`/api/journals/${id}/unpost`, { method: 'PUT' });
+            const result = await response.json();
+            if (result.success) {
+                loadData();
+            } else {
+                alert('Gagal membatalkan posting: ' + result.error);
+            }
+        } catch (error) {
+            console.error(error);
+            alert('Terjadi kesalahan saat membatalkan posting.');
         }
     };
 
@@ -315,7 +501,7 @@ function CashList({ transactionType }) {
         <div className="report-page">
             <div className="page-header">
                 <div>
-                    <h1 className="page-title">Transaksi Kas {transactionType ? (transactionType === 'IN' ? 'Masuk' : 'Keluar') : '(Cash)'}</h1>
+                    <h1 className="page-title">Transaksi Kas {transactionType ? (transactionType === 'IN' ? 'Masuk' : 'Keluar') : ''}</h1>
                     <p className="text-subtitle">
                         Pencatatan kas {transactionType ? (transactionType === 'IN' ? 'masuk' : 'keluar') : 'masuk dan keluar'}
                     </p>
@@ -329,7 +515,7 @@ function CashList({ transactionType }) {
                 <div className="modal-overlay">
                     <div className="modal modal-large">
                         <div className="modal-header">
-                            <h3>Transaksi Kas {transactionType === 'IN' ? 'Masuk' : 'Keluar'} Baru</h3>
+                            <h3>{formData.id ? 'Edit' : 'Baru'} Transaksi Kas {transactionType === 'IN' ? 'Masuk' : 'Keluar'}</h3>
                             <button className="modal-close" onClick={() => setShowForm(false)}>×</button>
                         </div>
                         <form onSubmit={handleSubmit}>
@@ -357,7 +543,7 @@ function CashList({ transactionType }) {
                                             ))}
                                         </select>
                                     ) : (
-                                        <div style={{ padding: '0.5rem', color: 'red' }}>Tidak ada tipe transaksi tersedia (Check Master Transcode {transactionType === 'IN' ? '10' : '11'})</div>
+                                        <div style={{ padding: '0.5rem', color: 'red' }}>Tidak ada tipe transaksi tersedia</div>
                                     )}
                                 </div>
                             </div>
@@ -383,28 +569,7 @@ function CashList({ transactionType }) {
                                 </div>
                             </div>
 
-                            <div className="form-row">
-                                <div className="form-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}>
-                                    <input type="checkbox" id="is_giro" checked={formData.is_giro} onChange={e => setFormData({ ...formData, is_giro: e.target.checked })} />
-                                    <label htmlFor="is_giro" style={{ marginBottom: 0 }}>Gunakan Giro/Cek</label>
-                                </div>
-                                {formData.is_giro && (
-                                    <>
-                                        <div className="form-group">
-                                            <label>Nama Bank</label>
-                                            <input type="text" value={formData.giro_bank_name} onChange={e => setFormData({ ...formData, giro_bank_name: e.target.value })} placeholder="Nama Bank" />
-                                        </div>
-                                        <div className="form-group">
-                                            <label>Nomor Giro/Cek</label>
-                                            <input type="text" value={formData.giro_number} onChange={e => setFormData({ ...formData, giro_number: e.target.value })} />
-                                        </div>
-                                        <div className="form-group">
-                                            <label>Jatuh Tempo</label>
-                                            <input type="date" value={formData.giro_due_date} onChange={e => setFormData({ ...formData, giro_due_date: e.target.value })} />
-                                        </div>
-                                    </>
-                                )}
-                            </div>
+
 
                             <div className="form-section">
                                 <div className="form-section-header">
@@ -428,10 +593,13 @@ function CashList({ transactionType }) {
                                         ) : (
                                             formData.details.map((row, idx) => {
                                                 const selectedAcc = accounts.find(a => a.id === parseInt(row.coa_id));
-                                                const isAllocatable = selectedAcc && (
-                                                    selectedAcc.name.toLowerCase().includes('hutang') ||
-                                                    selectedAcc.name.toLowerCase().includes('piutang')
-                                                );
+                                                const isHutang = selectedAcc && selectedAcc.name.toLowerCase().includes('hutang');
+                                                const isPiutang = selectedAcc && selectedAcc.name.toLowerCase().includes('piutang');
+                                                const isAllocatable = isHutang || isPiutang;
+
+                                                let targetList = [];
+                                                if (isHutang) targetList = outstandingAp;
+                                                else if (isPiutang) targetList = outstandingAr;
 
                                                 return (
                                                     <tr key={idx}>
@@ -453,7 +621,7 @@ function CashList({ transactionType }) {
                                                                 <option value="">-- Pilih Partner --</option>
                                                                 {(() => {
                                                                     const partnerMap = new Map();
-                                                                    outstandingInvoices.forEach(inv => {
+                                                                    targetList.forEach(inv => {
                                                                         if (!partnerMap.has(inv.partner_id)) {
                                                                             partnerMap.set(inv.partner_id, { name: inv.partner_name, balance: 0 });
                                                                         }
@@ -476,7 +644,7 @@ function CashList({ transactionType }) {
                                                                 disabled={!isAllocatable || !row.partner_id}
                                                             >
                                                                 <option value="">-- Tanpa Alokasi --</option>
-                                                                {outstandingInvoices
+                                                                {targetList
                                                                     .filter(inv => !row.partner_id || inv.partner_id === parseInt(row.partner_id))
                                                                     .map(inv => (
                                                                         <option key={inv.id} value={inv.id}>
@@ -513,7 +681,7 @@ function CashList({ transactionType }) {
 
                             <div className="form-actions">
                                 <button type="button" className="btn btn-outline" onClick={() => setShowForm(false)}>Batal</button>
-                                <button type="submit" className="btn btn-primary">Simpan Transaksi</button>
+                                <button type="submit" className="btn btn-primary">{formData.id ? 'Simpan Perubahan' : 'Simpan Transaksi'}</button>
                             </div>
                         </form>
                     </div>
@@ -530,21 +698,61 @@ function CashList({ transactionType }) {
                                 <th>Keterangan</th>
                                 <th>Total</th>
                                 <th>Status</th>
+                                <th style={{ width: '120px' }}>Aksi</th>
                             </tr>
                         </thead>
                         <tbody>
                             {journals.length === 0 ? (
-                                <tr><td colSpan="5" style={{ textAlign: 'center', padding: '1rem' }}>Belum ada transaksi</td></tr>
+                                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '1rem' }}>Belum ada transaksi</td></tr>
                             ) : (
                                 journals.map(j => {
-                                    const total = j.details ? j.details.reduce((sum, d) => sum + (parseFloat(d.debit) || 0), 0) : 0;
+                                    // Use backend total_amount if available, else calc from details
+                                    const total = j.total_amount ? parseFloat(j.total_amount) : (j.details ? j.details.reduce((sum, d) => sum + (parseFloat(d.debit) || 0), 0) : 0);
                                     return (
                                         <tr key={j.id}>
+
                                             <td><strong>{j.doc_number}</strong></td>
                                             <td>{formatDate(j.doc_date)}</td>
                                             <td>{j.description}</td>
                                             <td style={{ textAlign: 'right' }}>{formatMoney(total)}</td>
                                             <td><span className={`status-badge ${j.status === 'Posted' ? 'status-approved' : 'status-draft'}`}>{j.status}</span></td>
+                                            <td>
+                                                {j.status === 'Draft' && (
+                                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                        <button
+                                                            className="btn-icon"
+                                                            title="Edit"
+                                                            onClick={() => handleEdit(j)}
+                                                        >
+                                                            ✏️
+                                                        </button>
+                                                        <button
+                                                            className="btn-icon"
+                                                            title="Approve / Post"
+                                                            onClick={() => handleApprove(j.id)}
+                                                        >
+                                                            ✅
+                                                        </button>
+                                                        <button
+                                                            className="btn-icon"
+                                                            title="Hapus"
+                                                            onClick={() => handleDelete(j.id)}
+                                                        >
+                                                            🗑️
+                                                        </button>
+                                                    </div>
+                                                )}
+                                                {j.status === 'Posted' && (
+                                                    <button
+                                                        className="btn-icon"
+                                                        title="Unpost / Batal Posting"
+                                                        style={{ color: '#d9534f' }} // Red/Warm color or standard icon
+                                                        onClick={() => handleUnpost(j.id)}
+                                                    >
+                                                        🔓
+                                                    </button>
+                                                )}
+                                            </td>
                                         </tr>
                                     );
                                 })
@@ -555,6 +763,7 @@ function CashList({ transactionType }) {
             </div>
         </div>
     );
+
 }
 
 export default CashList;

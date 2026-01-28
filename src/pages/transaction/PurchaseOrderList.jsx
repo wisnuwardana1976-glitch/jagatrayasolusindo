@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 
+import { usePeriod } from '../../context/PeriodContext';
+
 function PurchaseOrderList() {
+    const { selectedPeriod } = usePeriod();
     const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -25,12 +28,23 @@ function PurchaseOrderList() {
     useEffect(() => {
         fetchData();
         fetchMasterData();
-    }, []);
+    }, [selectedPeriod]); // Add selectedPeriod dependency
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/purchase-orders');
+            let url = '/api/purchase-orders';
+            if (selectedPeriod) {
+                // Ensure format YYYY-MM-DD
+                const formatDate = (d) => new Date(d).toISOString().split('T')[0];
+                const query = new URLSearchParams({
+                    startDate: formatDate(selectedPeriod.start_date),
+                    endDate: formatDate(selectedPeriod.end_date)
+                }).toString();
+                url += `?${query}`;
+            }
+
+            const response = await fetch(url);
             const data = await response.json();
             if (data.success) {
                 setOrders(data.data);

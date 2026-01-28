@@ -40,6 +40,8 @@ import JournalVoucherList from './pages/finance/JournalVoucherList';
 import RecalculateInventory from './pages/inventory/RecalculateInventory';
 import './index.css';
 
+import { PeriodProvider } from './context/PeriodContext';
+
 function App() {
     const [currentPage, setCurrentPage] = useState('dashboard');
     const [connectionStatus, setConnectionStatus] = useState('checking');
@@ -148,12 +150,14 @@ function App() {
     };
 
     return (
-        <div className="app-container">
-            <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} />
-            <main className="main-content">
-                {renderPage()}
-            </main>
-        </div>
+        <PeriodProvider>
+            <div className="app-container">
+                <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} />
+                <main className="main-content">
+                    {renderPage()}
+                </main>
+            </div>
+        </PeriodProvider>
     );
 }
 

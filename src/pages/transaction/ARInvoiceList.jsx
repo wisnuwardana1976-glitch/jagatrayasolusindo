@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 
+import { usePeriod } from '../../context/PeriodContext';
+
 function ARInvoiceList() {
+    const { selectedPeriod } = usePeriod();
     const [invoices, setInvoices] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -33,12 +36,21 @@ function ARInvoiceList() {
     useEffect(() => {
         fetchData();
         fetchMasterData();
-    }, []);
+    }, [selectedPeriod]);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/ar-invoices');
+            let url = '/api/ar-invoices';
+            if (selectedPeriod) {
+                const formatDate = (d) => new Date(d).toISOString().split('T')[0];
+                const query = new URLSearchParams({
+                    startDate: formatDate(selectedPeriod.start_date),
+                    endDate: formatDate(selectedPeriod.end_date)
+                }).toString();
+                url += `?${query}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             if (data.success) {
                 setInvoices(data.data);
@@ -68,10 +80,11 @@ function ARInvoiceList() {
 
             if (custData.success) setCustomers(custData.data);
             if (shpData.success) {
-                // Filter Shipments if needed, maybe only 'Shipped' status? Assuming 'Shipped' or similar for now.
-                // Assuming status is 'Shipped' or similar. If not sure, show all or filter if needed.
-                // Let's just show all for now or check status. Standard flow usually picking from Shipped.
-                setShipments(shpData.data);
+                // Only show Approved shipments that are NOT fully billed
+                setShipments(shpData.data.filter(s =>
+                    s.status === 'Approved' &&
+                    (parseFloat(s.total_billed || 0) < parseFloat(s.total_shipped || 0))
+                ));
             }
             if (itemData.success) setItems(itemData.data);
             if (transData.success) {
@@ -121,14 +134,21 @@ function ARInvoiceList() {
                     ...prev,
                     shipment_id: shp.id,
                     partner_id: shp.partner_id,
-                    items: shpDetails.map(d => ({
-                        item_id: d.item_id,
-                        description: d.item_name || '',
-                        quantity: parseFloat(d.quantity),
-                        unit_price: parseFloat(d.unit_price) || 0, // Price from SO
-                        amount: 0,
-                        shipment_id: shp.id
-                    })),
+                    items: shpDetails
+                        .map(d => {
+                            const qtyShipped = parseFloat(d.quantity);
+                            const qtyBilled = parseFloat(d.qty_billed || 0);
+                            const remaining = qtyShipped - qtyBilled;
+                            return {
+                                item_id: d.item_id,
+                                description: d.item_name || '',
+                                quantity: remaining > 0 ? remaining : 0,
+                                unit_price: parseFloat(d.unit_price) || 0,
+                                amount: 0,
+                                shipment_id: shp.id
+                            };
+                        })
+                        .filter(item => item.quantity > 0),
                     sales_person_id: (shpDetails.length > 0 && shpDetails[0].sales_person_id) ? shpDetails[0].sales_person_id : '',
                     payment_term_id: (shpDetails.length > 0 && shpDetails[0].payment_term_id) ? shpDetails[0].payment_term_id : '',
                     tax_type: shp.tax_type || 'Exclude'
@@ -165,6 +185,7 @@ function ARInvoiceList() {
                 setShowForm(false);
                 resetForm();
                 fetchData();
+                fetchMasterData();
             } else {
                 alert('Error: ' + data.error);
             }
@@ -218,6 +239,7 @@ function ARInvoiceList() {
             if (data.success) {
                 alert(data.message);
                 fetchData();
+                fetchMasterData();
             } else {
                 alert('Error: ' + data.message);
             }
@@ -695,6 +717,7 @@ function ARInvoiceList() {
                             <tr>
                                 <th>Tanggal</th>
                                 <th>No. Dokumen</th>
+                                <th>No. Shipment</th>
                                 <th>jth Tempo</th>
                                 <th>Customer</th>
                                 <th>Status</th>
@@ -711,6 +734,7 @@ function ARInvoiceList() {
                                     <tr key={inv.id}>
                                         <td>{formatDate(inv.doc_date)}</td>
                                         <td><strong>{inv.doc_number}</strong></td>
+                                        <td>{inv.shipment_number || '-'}</td>
                                         <td>{inv.due_date ? formatDate(inv.due_date) : '-'}</td>
                                         <td>{inv.partner_name || '-'}</td>
                                         <td>

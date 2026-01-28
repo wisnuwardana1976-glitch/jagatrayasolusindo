@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 
+import { usePeriod } from '../../context/PeriodContext';
+
 function ShipmentList() {
+    const { selectedPeriod } = usePeriod();
     const [shipments, setShipments] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -27,12 +30,21 @@ function ShipmentList() {
     useEffect(() => {
         fetchData();
         fetchMasterData();
-    }, []);
+    }, [selectedPeriod]);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/shipments');
+            let url = '/api/shipments';
+            if (selectedPeriod) {
+                const formatDate = (d) => new Date(d).toISOString().split('T')[0];
+                const query = new URLSearchParams({
+                    startDate: formatDate(selectedPeriod.start_date),
+                    endDate: formatDate(selectedPeriod.end_date)
+                }).toString();
+                url += `?${query}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             if (data.success) {
                 setShipments(data.data);
@@ -536,10 +548,23 @@ function ShipmentList() {
                                                     <button className="btn-icon" onClick={() => handleDelete(s.id)} title="Hapus">🗑️</button>
                                                 </>
                                             ) : (
-                                                <>
-                                                    <button className="btn-icon" onClick={() => handleUnpost(s.id)} title="Unpost" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
-                                                    <button className="btn-icon" onClick={() => handleEdit(s.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
-                                                </>
+                                                (() => {
+                                                    const isLocked = parseFloat(s.total_billed || 0) >= parseFloat(s.total_shipped || 0) && parseFloat(s.total_shipped || 0) > 0;
+                                                    return (
+                                                        <>
+                                                            <button
+                                                                className="btn-icon"
+                                                                onClick={() => !isLocked && handleUnpost(s.id)}
+                                                                title={isLocked ? "Terkunci (Sudah ada Tagihan)" : "Unpost"}
+                                                                style={{ color: isLocked ? '#ccc' : 'orange', marginRight: '5px', cursor: isLocked ? 'not-allowed' : 'pointer' }}
+                                                                disabled={isLocked}
+                                                            >
+                                                                🔓
+                                                            </button>
+                                                            <button className="btn-icon" onClick={() => handleEdit(s.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
+                                                        </>
+                                                    );
+                                                })()
                                             )}
                                         </td>
                                     </tr>

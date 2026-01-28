@@ -264,9 +264,11 @@ const icons = {
 };
 
 import { useState, useEffect } from 'react';
+import { usePeriod } from '../context/PeriodContext';
 
 function Sidebar({ currentPage, setCurrentPage }) {
     const [activeMenuConfig, setActiveMenuConfig] = useState(null);
+    const { selectedPeriod, setSelectedPeriod, periods } = usePeriod();
 
     useEffect(() => {
         loadMenuConfig();
@@ -329,6 +331,40 @@ function Sidebar({ currentPage, setCurrentPage }) {
             <div className="sidebar-header">
                 <h1>JAGATRAYA</h1>
                 <p>Enterprise Resource Planning</p>
+            </div>
+
+            <div className="period-selector" style={{ padding: '0 1rem 1rem 1rem', borderBottom: '1px solid #48546b', marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', color: '#a0aec0', marginBottom: '0.25rem' }}>Periode Akuntansi</label>
+                <select
+                    value={selectedPeriod ? selectedPeriod.id : ''}
+                    onChange={(e) => {
+                        const pid = parseInt(e.target.value);
+                        const p = periods.find(p => p.id === pid);
+                        setSelectedPeriod(p || null);
+                    }}
+                    style={{
+                        width: '100%',
+                        padding: '0.4rem',
+                        fontSize: '0.85rem',
+                        backgroundColor: '#2d3748',
+                        color: 'white',
+                        border: '1px solid #4a5568',
+                        borderRadius: '4px',
+                        outline: 'none'
+                    }}
+                >
+                    <option value="">-- Semua Periode --</option>
+                    {periods.map(p => (
+                        <option key={p.id} value={p.id}>
+                            {p.name} ({p.status})
+                        </option>
+                    ))}
+                </select>
+                {selectedPeriod && (
+                    <div style={{ fontSize: '0.7rem', color: '#718096', marginTop: '4px' }}>
+                        Filter: {new Date(selectedPeriod.start_date).toLocaleDateString()} - {new Date(selectedPeriod.end_date).toLocaleDateString()}
+                    </div>
+                )}
             </div>
 
             {displayMenu.map((section) => (

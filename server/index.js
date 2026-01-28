@@ -540,13 +540,30 @@ app.delete('/api/warehouses/:id', async (req, res) => {
 // ==================== SHIPMENTS ====================
 app.get('/api/shipments', async (req, res) => {
   try {
-    const result = await executeQuery(`
-      SELECT s.*, p.name as customer_name, so.doc_number as so_number
-      FROM Shipments s
-      LEFT JOIN Partners p ON s.partner_id = p.id
-      LEFT JOIN SalesOrders so ON s.so_id = so.id
-      ORDER BY s.doc_date DESC, s.doc_number DESC
-    `);
+    const { startDate, endDate } = req.query;
+    let query = `
+            SELECT
+                s.*,
+                so.doc_number as so_number,
+                p.name as partner_name,
+                l.name as location_name,
+                (SELECT SUM(quantity) FROM ShipmentDetails WHERE shipment_id = s.id) as total_shipped,
+                (SELECT SUM(quantity) FROM ARInvoiceDetails ard JOIN ARInvoices ari ON ard.invoice_id = ari.id WHERE ari.shipment_id = s.id AND ari.status != 'Cancelled') as total_billed
+            FROM Shipments s
+            LEFT JOIN SalesOrders so ON s.so_id = so.id
+            LEFT JOIN Partners p ON so.partner_id = p.id
+            LEFT JOIN Locations l ON s.location_id = l.id
+        `;
+
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE s.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+
+    query += ' ORDER BY s.doc_number DESC';
+
+    const result = await executeQuery(query, params);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -862,7 +879,7 @@ app.delete('/api/entities/:id', async (req, res) => {
 app.get('/api/sites', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT s.*, e.name as entity_name 
+      SELECT s.*, e.name as entity_name
       FROM Sites s
       LEFT JOIN Entities e ON s.entity_id = e.id
       ORDER BY s.code
@@ -922,7 +939,12 @@ app.delete('/api/sites/:id', async (req, res) => {
 app.get('/api/journals', async (req, res) => {
   try {
     const { source_type } = req.query;
-    let sql = 'SELECT * FROM JournalVouchers';
+    // Include total_amount subquery
+    let sql = `
+      SELECT (SELECT SUM(d.debit) FROM JournalVoucherDetails d WHERE d.jv_id = JournalVouchers.id) as total_amount,
+      *
+      FROM JournalVouchers
+    `;
     const params = [];
 
     if (source_type) {
@@ -930,14 +952,13 @@ app.get('/api/journals', async (req, res) => {
       if (source_type === 'SYSTEM') {
         sql += ' WHERE source_type IS NOT NULL';
       } else if (source_type === 'MANUAL') {
-        sql += ' WHERE source_type IS NULL';
+        sql += " WHERE (source_type = 'MANUAL' OR source_type IS NULL)";
       } else {
         sql += ' WHERE source_type = ?';
         params.push(source_type);
       }
     } else {
-      // Default: Show all (or strictly manual if desired? User asked for separate menu)
-      // If no filter provided, maybe return all.
+      // Default: Show all
     }
 
     sql += ' ORDER BY doc_date DESC, doc_number DESC';
@@ -955,7 +976,7 @@ app.get('/api/journals/:id', async (req, res) => {
     if (result.length === 0) return res.status(404).json({ success: false, message: 'Journal not found' });
 
     const details = await executeQuery(`
-      SELECT d.*, a.code as coa_code, a.name as coa_name 
+      SELECT d.*, a.code as coa_code, a.name as coa_name
       FROM JournalVoucherDetails d
       LEFT JOIN Accounts a ON d.coa_id = a.id
       WHERE d.jv_id = ?
@@ -981,11 +1002,11 @@ app.get('/api/invoices/outstanding', async (req, res) => {
     const table = type === 'AP' ? 'APInvoices' : 'ARInvoices';
 
     const query = `
-      SELECT i.id, i.doc_number, i.doc_date, i.total_amount, i.paid_amount, (i.total_amount - i.paid_amount) as balance, 
+      SELECT i.id, i.doc_number, i.doc_date, i.total_amount, i.paid_amount, (i.total_amount - i.paid_amount) as balance,
              p.name as partner_name, i.partner_id
       FROM ${table} i
       LEFT JOIN Partners p ON i.partner_id = p.id
-      WHERE i.status IN ('Posted', 'Partial') 
+      WHERE i.status IN ('Posted', 'Partial')
       AND (i.total_amount - i.paid_amount) > 0
       ORDER BY i.doc_date ASC
     `;
@@ -1003,6 +1024,11 @@ app.post('/api/journals', async (req, res) => {
   try {
     const { doc_number, doc_date, description, transcode_id, details, is_giro, giro_number, giro_due_date } = req.body;
 
+    const tId = parseInt(transcode_id);
+    if (isNaN(tId)) {
+      return res.status(400).json({ success: false, error: 'Invalid Transcode ID' });
+    }
+
     // Basic validation
     let totalDebit = 0;
     let totalCredit = 0;
@@ -1018,39 +1044,60 @@ app.post('/api/journals', async (req, res) => {
     const docNum = doc_number === 'AUTO' ? `JV/${new Date().getTime()}` : String(doc_number);
 
     const p_is_giro = is_giro ? 1 : 0;
-    const p_giro_number = giro_number ? String(giro_number) : null;
-    const p_giro_due_date = giro_due_date ? String(giro_due_date) : null;
-    const p_giro_bank_name = req.body.giro_bank_name ? String(req.body.giro_bank_name) : null;
+    const p_giro_number = (giro_number && giro_number !== 'undefined' && giro_number !== 'null') ? String(giro_number) : null;
+    const p_giro_due_date = (giro_due_date && giro_due_date !== 'undefined' && giro_due_date !== 'null') ? String(giro_due_date) : null;
+    const p_giro_bank_name = (req.body.giro_bank_name && req.body.giro_bank_name !== 'undefined' && req.body.giro_bank_name !== 'null') ? String(req.body.giro_bank_name) : null;
 
-    const params = [docNum, String(doc_date), String(description), parseInt(transcode_id), p_is_giro, p_giro_number, p_giro_due_date, p_giro_bank_name];
-    // logDebug(`Insert Params: ${JSON.stringify(params)}`);
+    const params = [docNum, String(doc_date), String(description), tId, p_is_giro, p_giro_number, p_giro_due_date, p_giro_bank_name];
+
+    // Debug logging
+    // console.log('Insert JV Params:', params);
 
     const result = await executeQuery(
-      `INSERT INTO JournalVouchers (doc_number, doc_date, description, status, transcode_id, source_type, is_giro, giro_number, giro_due_date, giro_bank_name) 
+      `INSERT INTO JournalVouchers (doc_number, doc_date, description, status, transcode_id, source_type, is_giro, giro_number, giro_due_date, giro_bank_name)
        VALUES (?, ?, ?, 'Draft', ?, 'MANUAL', ?, ?, ?, ?)`,
       params
     );
 
-    const jvId = result.insertId || (await executeQuery('SELECT @@IDENTITY')).id || (await executeQuery('SELECT MAX(id) from JournalVouchers'))[0]['MAX(id)'];
+    let jvId = result.insertId;
+
+    if (!jvId) {
+      // Fallback for some ODBC drivers
+      const idRes = await executeQuery('SELECT @@IDENTITY as id');
+      if (idRes && idRes[0] && idRes[0].id) {
+        jvId = idRes[0].id;
+      } else {
+        const maxRes = await executeQuery('SELECT MAX(id) as max_id from JournalVouchers');
+        jvId = maxRes[0].max_id;
+      }
+    }
+
+    if (!jvId) {
+      throw new Error('Failed to retrieve new Journal Voucher ID');
+    }
 
     for (const det of details) {
+      const coaId = parseInt(det.coa_id);
+      if (isNaN(coaId)) {
+        throw new Error(`Invalid Account (COA ID) in details: ${det.coa_id}`);
+      }
+
       const refId = det.ref_id ? parseInt(det.ref_id) : null;
       const refType = det.ref_type ? String(det.ref_type) : null;
+      const debit = parseFloat(det.debit) || 0;
+      const credit = parseFloat(det.credit) || 0;
 
       await executeQuery(
-        `INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit, ref_id, ref_type) 
+        `INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit, ref_id, ref_type)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [jvId, det.coa_id, det.description || '', det.debit, det.credit, refId, refType]
+        [jvId, coaId, det.description || '', debit, credit, refId, refType]
       );
 
       // Allocation Update
       if (refId && refType) {
         const table = refType === 'AP' ? 'APInvoices' : (refType === 'AR' ? 'ARInvoices' : null);
         if (table) {
-          const amount = parseFloat(det.debit) || parseFloat(det.credit) || 0; // Simplified. Logic: Payment reduces balance.
-          // For AP Payment (Cash Out), we Debit AP Account. So amount is det.debit.
-          // For AR Receipt (Cash In), we Credit AR Account. So amount is det.credit.
-          // We'll trust the amount passed is the reduction amount.
+          const amount = debit + credit; // One of them is 0
 
           await executeQuery(`UPDATE ${table} SET paid_amount = paid_amount + ? WHERE id = ?`, [amount, refId]);
           // Update status if Paid
@@ -1063,7 +1110,15 @@ app.post('/api/journals', async (req, res) => {
 
     res.json({ success: true, message: 'Journal created successfully', id: jvId, doc_number: docNum });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Create Journal Error Params:', req.body);
+    console.error('Create Journal Error:', error);
+
+    let errorMessage = error.message;
+    if (error.odbcErrors && error.odbcErrors.length > 0) {
+      errorMessage += ' Details: ' + JSON.stringify(error.odbcErrors);
+    }
+
+    res.status(500).json({ success: false, error: errorMessage });
   }
 });
 
@@ -1129,7 +1184,7 @@ app.put('/api/journals/:id', async (req, res) => {
       const refType = det.ref_type ? String(det.ref_type) : null;
 
       await executeQuery(
-        `INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit, ref_id, ref_type) 
+        `INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit, ref_id, ref_type)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [jvId, det.coa_id, det.description || '', det.debit, det.credit, refId, refType]
       );
@@ -1209,7 +1264,7 @@ app.put('/api/journals/:id/unpost', async (req, res) => {
 app.get('/api/gl-settings', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT s.*, a.code as account_code, a.name as account_name 
+      SELECT s.*, a.code as account_code, a.name as account_name
       FROM GeneralLedgerSettings s
       LEFT JOIN Accounts a ON s.account_id = a.id
     `);
@@ -1333,7 +1388,7 @@ async function getGlAccount(key) {
 app.get('/api/warehouses', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT w.*, s.name as site_name 
+      SELECT w.*, s.name as site_name
       FROM Warehouses w
       LEFT JOIN Sites s ON w.site_id = s.id
       ORDER BY w.code
@@ -1393,7 +1448,7 @@ app.delete('/api/warehouses/:id', async (req, res) => {
 app.get('/api/sub-warehouses', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT sw.*, w.description as warehouse_name 
+      SELECT sw.*, w.description as warehouse_name
       FROM SubWarehouses sw
       LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
       ORDER BY sw.code
@@ -1453,7 +1508,7 @@ app.delete('/api/sub-warehouses/:id', async (req, res) => {
 app.get('/api/locations', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT l.*, sw.name as sub_warehouse_name 
+      SELECT l.*, sw.name as sub_warehouse_name
       FROM Locations l
       LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
       ORDER BY l.code
@@ -1512,13 +1567,24 @@ app.delete('/api/locations/:id', async (req, res) => {
 // ==================== PURCHASE ORDERS ====================
 app.get('/api/purchase-orders', async (req, res) => {
   try {
-    const result = await executeQuery(`
-      SELECT po.*, p.name as partner_name, p.code as partner_code, t.name as transcode_name
-      FROM PurchaseOrders po
-      LEFT JOIN Partners p ON po.partner_id = p.id
-      LEFT JOIN Transcodes t ON po.transcode_id = t.id
-      ORDER BY po.doc_date DESC, po.doc_number DESC
-    `);
+    const { startDate, endDate } = req.query;
+    let query = `
+            SELECT po.*, p.name as partner_name, t.name as transcode_name, pt.name as payment_term_name
+            FROM PurchaseOrders po
+            LEFT JOIN Partners p ON po.partner_id = p.id
+            LEFT JOIN Transcodes t ON po.transcode_id = t.id
+            LEFT JOIN PaymentTerms pt ON po.payment_term_id = pt.id
+        `;
+
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE po.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+
+    query += ' ORDER BY po.doc_number DESC';
+
+    const result = await executeQuery(query, params);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1599,7 +1665,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
       // If updating details, block it.
       // For now, simpler: Block any update except Status change to 'Closed' (which might happen via system)
       // actually, if user is editing, we should block.
-      // But wait, what if they just want to change Remarks? We don't have remarks in PO update yet? 
+      // But wait, what if they just want to change Remarks? We don't have remarks in PO update yet?
       // Let's safe block critical updates.
 
       // If the request is trying to update details (which effectively replaces them), block it.
@@ -1684,14 +1750,24 @@ app.put('/api/purchase-orders/:id/unapprove', async (req, res) => {
 // ==================== SALES ORDERS ====================
 app.get('/api/sales-orders', async (req, res) => {
   try {
-    const result = await executeQuery(`
-      SELECT so.*, p.name as partner_name, p.code as partner_code, sp.name as salesperson_name, t.name as transcode_name
-      FROM SalesOrders so
-      LEFT JOIN Partners p ON so.partner_id = p.id
-      LEFT JOIN SalesPersons sp ON so.sales_person_id = sp.id
-      LEFT JOIN Transcodes t ON so.transcode_id = t.id
-      ORDER BY so.doc_date DESC, so.doc_number DESC
-    `);
+    const { startDate, endDate } = req.query;
+    let query = `
+            SELECT so.*, p.name as partner_name, t.name as transcode_name, pt.name as payment_term_name
+            FROM SalesOrders so
+            LEFT JOIN Partners p ON so.partner_id = p.id
+            LEFT JOIN Transcodes t ON so.transcode_id = t.id
+            LEFT JOIN PaymentTerms pt ON so.payment_term_id = pt.id
+        `;
+
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE so.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+
+    query += ' ORDER BY so.doc_number DESC';
+
+    const result = await executeQuery(query, params);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1824,16 +1900,30 @@ app.delete('/api/sales-orders/:id', async (req, res) => {
 // ==================== RECEIVINGS ====================
 app.get('/api/receivings', async (req, res) => {
   try {
-    const result = await executeQuery(`
-      SELECT r.*, p.name as partner_name, po.doc_number as po_number, w.code as warehouse_code, l.name as location_name, t.name as transcode_name
-      FROM Receivings r
-      LEFT JOIN Partners p ON r.partner_id = p.id
-      LEFT JOIN PurchaseOrders po ON r.po_id = po.id
-      LEFT JOIN Warehouses w ON r.warehouse_id = w.id
-      LEFT JOIN Locations l ON r.location_id = l.id
-      LEFT JOIN Transcodes t ON r.transcode_id = t.id
-      ORDER BY r.doc_date DESC, r.doc_number DESC
-    `);
+    const { startDate, endDate } = req.query;
+    let query = `
+            SELECT
+                rec.*,
+                po.doc_number as po_number,
+                p.name as partner_name,
+                l.name as location_name,
+                (SELECT SUM(quantity) FROM ReceivingDetails WHERE receiving_id = rec.id) as total_received,
+                (SELECT SUM(quantity) FROM APInvoiceDetails ad JOIN APInvoices ai ON ad.invoice_id = ai.id WHERE ai.receiving_id = rec.id AND ai.status != 'Cancelled') as total_billed
+            FROM Receivings rec
+            LEFT JOIN PurchaseOrders po ON rec.po_id = po.id
+            LEFT JOIN Partners p ON po.partner_id = p.id
+            LEFT JOIN Locations l ON rec.location_id = l.id
+        `;
+
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE rec.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+
+    query += ' ORDER BY rec.doc_number DESC';
+
+    const result = await executeQuery(query, params);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1856,7 +1946,13 @@ app.get('/api/receivings/:id', async (req, res) => {
     const details = await executeQuery(`
       SELECT d.*, i.code as item_code, i.name as item_name, i.unit as unit_code,
              COALESCE(pod.unit_price, 0) as unit_price,
-             COALESCE(po.tax_type, 'Exclude') as tax_type
+             COALESCE(po.tax_type, 'Exclude') as tax_type,
+             (SELECT COALESCE(SUM(apd.quantity), 0)
+              FROM APInvoiceDetails apd
+              JOIN APInvoices api ON apd.ap_invoice_id = api.id
+              WHERE apd.receiving_id = d.receiving_id
+              AND apd.item_id = d.item_id
+              AND api.status <> 'Cancelled') as qty_billed
       FROM ReceivingDetails d
       LEFT JOIN Items i ON d.item_id = i.id
       LEFT JOIN Receivings r ON d.receiving_id = r.id
@@ -2002,14 +2098,23 @@ app.put('/api/receivings/:id/unapprove', async (req, res) => {
 // ==================== AP INVOICES ====================
 app.get('/api/ap-invoices', async (req, res) => {
   try {
-    const result = await executeQuery(`
-      SELECT ap.*, p.name as partner_name, t.name as transcode_name, r.doc_number as receiving_number
-      FROM APInvoices ap
-      LEFT JOIN Partners p ON ap.partner_id = p.id
-      LEFT JOIN Transcodes t ON ap.transcode_id = t.id
-      LEFT JOIN Receivings r ON ap.receiving_id = r.id
-      ORDER BY ap.doc_date DESC, ap.doc_number DESC
-    `);
+    const { startDate, endDate } = req.query;
+    let query = `
+            SELECT inv.*, p.name as partner_name, rec.doc_number as receiving_number
+            FROM APInvoices inv
+            LEFT JOIN Partners p ON inv.partner_id = p.id
+            LEFT JOIN Receivings rec ON inv.receiving_id = rec.id
+        `;
+
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE inv.doc_date BETWEEN ? AND ?'; // Changed from invoice_date to doc_date based on original query
+      params.push(startDate, endDate);
+    }
+
+    query += ' ORDER BY inv.doc_number DESC';
+
+    const result = await executeQuery(query, params);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -2208,11 +2313,12 @@ app.put('/api/ap-invoices/:id/unpost', async (req, res) => {
 app.get('/api/ar-invoices', async (req, res) => {
   try {
     const result = await executeQuery(`
-      SELECT ar.*, p.name as partner_name, sp.name as sales_person_name, pt.name as payment_term_name
+      SELECT ar.*, p.name as partner_name, sp.name as sales_person_name, pt.name as payment_term_name, s.doc_number as shipment_number
       FROM ARInvoices ar
       LEFT JOIN Partners p ON ar.partner_id = p.id
       LEFT JOIN SalesPersons sp ON ar.sales_person_id = sp.id
       LEFT JOIN PaymentTerms pt ON ar.payment_term_id = pt.id
+      LEFT JOIN Shipments s ON ar.shipment_id = s.id
       ORDER BY ar.doc_date DESC
     `);
     res.json({ success: true, data: result });
@@ -2492,7 +2598,13 @@ app.get('/api/shipments/:id', async (req, res) => {
                COALESCE(sod.unit_price, 0) as unit_price,
                COALESCE(so.tax_type, 'Exclude') as tax_type,
                so.sales_person_id,
-               so.payment_term_id
+               so.payment_term_id,
+               (SELECT COALESCE(SUM(ard.quantity), 0) 
+                FROM ARInvoiceDetails ard 
+                JOIN ARInvoices ari ON ard.ar_invoice_id = ari.id 
+                WHERE ari.shipment_id = d.shipment_id 
+                AND ard.item_id = d.item_id 
+                AND ari.status <> 'Cancelled') as qty_billed
         FROM ShipmentDetails d
         LEFT JOIN Items i ON d.item_id = i.id
         LEFT JOIN Shipments s ON d.shipment_id = s.id

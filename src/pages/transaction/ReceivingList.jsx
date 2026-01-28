@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 
+import { usePeriod } from '../../context/PeriodContext';
+
 function ReceivingList() {
+    const { selectedPeriod } = usePeriod();
     const [receivings, setReceivings] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -28,12 +31,21 @@ function ReceivingList() {
     useEffect(() => {
         fetchData();
         fetchMasterData();
-    }, []);
+    }, [selectedPeriod]);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/receivings');
+            let url = '/api/receivings';
+            if (selectedPeriod) {
+                const formatDate = (d) => new Date(d).toISOString().split('T')[0];
+                const query = new URLSearchParams({
+                    startDate: formatDate(selectedPeriod.start_date),
+                    endDate: formatDate(selectedPeriod.end_date)
+                }).toString();
+                url += `?${query}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             if (data.success) setReceivings(data.data);
         } catch (error) {
@@ -491,7 +503,14 @@ function ReceivingList() {
                                         <td>{rec.po_number || '-'}</td>
                                         <td>{rec.partner_name || '-'}</td>
                                         <td>{rec.location_name || '-'}</td>
-                                        <td><span className={`badge ${rec.status === 'Draft' ? 'badge-warning' : 'badge-success'}`}>{rec.status}</span></td>
+                                        <td>
+                                            <span className={`badge ${rec.status === 'Draft' ? 'badge-warning' : 'badge-success'}`}>{rec.status}</span>
+                                            {rec.status !== 'Draft' && (
+                                                <div style={{ fontSize: '10px', color: 'gray' }}>
+                                                    Rec: {parseFloat(rec.total_received || 0)} / Bill: {parseFloat(rec.total_billed || 0)}
+                                                </div>
+                                            )}
+                                        </td>
                                         <td style={{ textAlign: 'center' }}>
                                             {rec.status === 'Draft' ? (
                                                 <>
@@ -500,11 +519,23 @@ function ReceivingList() {
                                                     <button className="btn-icon" onClick={() => handleDelete(rec.id)} title="Hapus">🗑️</button>
                                                 </>
                                             ) : (
-
-                                                <>
-                                                    <button className="btn-icon" onClick={() => handleUnpost(rec.id)} title="Unpost" style={{ color: 'orange', marginRight: '5px' }}>🔓</button>
-                                                    <button className="btn-icon" onClick={() => handleEdit(rec.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
-                                                </>
+                                                (() => {
+                                                    const isLocked = parseFloat(rec.total_billed || 0) >= parseFloat(rec.total_received || 0) && parseFloat(rec.total_received || 0) > 0;
+                                                    return (
+                                                        <>
+                                                            <button
+                                                                className="btn-icon"
+                                                                onClick={() => !isLocked && handleUnpost(rec.id)}
+                                                                title={isLocked ? "Terkunci (Sudah ada Tagihan)" : "Unpost"}
+                                                                style={{ color: isLocked ? '#ccc' : 'orange', marginRight: '5px', cursor: isLocked ? 'not-allowed' : 'pointer' }}
+                                                                disabled={isLocked}
+                                                            >
+                                                                🔓
+                                                            </button>
+                                                            <button className="btn-icon" onClick={() => handleEdit(rec.id)} title="Lihat Detail" style={{ color: 'blue' }}>👁️</button>
+                                                        </>
+                                                    );
+                                                })()
                                             )}
                                         </td>
                                     </tr>

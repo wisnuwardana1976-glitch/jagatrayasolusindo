@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 
+import { usePeriod } from '../../context/PeriodContext';
+
 function APInvoiceList() {
+    const { selectedPeriod } = usePeriod();
     const [invoices, setInvoices] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -30,12 +33,21 @@ function APInvoiceList() {
     useEffect(() => {
         fetchData();
         fetchMasterData();
-    }, []);
+    }, [selectedPeriod]);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/ap-invoices');
+            let url = '/api/ap-invoices';
+            if (selectedPeriod) {
+                const formatDate = (d) => new Date(d).toISOString().split('T')[0];
+                const query = new URLSearchParams({
+                    startDate: formatDate(selectedPeriod.start_date),
+                    endDate: formatDate(selectedPeriod.end_date)
+                }).toString();
+                url += `?${query}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             if (data.success) {
                 setInvoices(data.data);
@@ -61,8 +73,11 @@ function APInvoiceList() {
 
             if (supData.success) setSuppliers(supData.data);
             if (recData.success) {
-                // Only show Approved receivings for selection
-                setReceivings(recData.data.filter(r => r.status === 'Approved'));
+                // Only show Approved receivings that are NOT fully billed
+                setReceivings(recData.data.filter(r =>
+                    r.status === 'Approved' &&
+                    (parseFloat(r.total_billed || 0) < parseFloat(r.total_received || 0))
+                ));
             }
             if (itemData.success) setItems(itemData.data);
             if (transData.success) {
@@ -110,14 +125,21 @@ function APInvoiceList() {
                     ...prev,
                     receiving_id: rec.id,
                     partner_id: rec.partner_id,
-                    items: recDetails.map(d => ({
-                        item_id: d.item_id,
-                        description: d.item_name || '', // Use item name or remarks
-                        quantity: parseFloat(d.quantity),
-                        unit_price: parseFloat(d.unit_price) || 0, // Price from PO
-                        amount: 0,
-                        receiving_id: rec.id
-                    })),
+                    items: recDetails
+                        .map(d => {
+                            const qtyReceived = parseFloat(d.quantity);
+                            const qtyBilled = parseFloat(d.qty_billed || 0);
+                            const remaining = qtyReceived - qtyBilled;
+                            return {
+                                item_id: d.item_id,
+                                description: d.item_name || '',
+                                quantity: remaining > 0 ? remaining : 0,
+                                unit_price: parseFloat(d.unit_price) || 0,
+                                amount: 0,
+                                receiving_id: rec.id
+                            };
+                        })
+                        .filter(item => item.quantity > 0), // Only include items with remaining quantity
                     tax_type: rec.tax_type || 'Exclude'
                 }));
             }
@@ -153,6 +175,7 @@ function APInvoiceList() {
                 setShowForm(false);
                 resetForm();
                 fetchData();
+                fetchMasterData();
             } else {
                 alert('Error: ' + data.error);
             }
@@ -205,6 +228,7 @@ function APInvoiceList() {
             if (data.success) {
                 alert(data.message);
                 fetchData();
+                fetchMasterData();
             } else {
                 alert('Error: ' + data.message);
             }
