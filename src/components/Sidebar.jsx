@@ -56,6 +56,11 @@ const menuItems = [
     {
         section: 'Laporan',
         items: [
+            { id: 'report/sales-summary', label: 'Laporan Penjualan', icon: 'file-text' },
+            { id: 'report/purchase-summary', label: 'Laporan Pembelian', icon: 'file-text' },
+            { id: 'report/trial-balance', label: 'Neraca Saldo', icon: 'book-open' },
+            { id: 'report/profit-loss', label: 'Laba Rugi', icon: 'dollar-sign' },
+            { id: 'report/balance-sheet', label: 'Neraca', icon: 'building' },
             { id: 'report/po-outstanding', label: 'PO Outstanding', icon: 'file-text' },
             { id: 'report/so-outstanding', label: 'SO Outstanding', icon: 'file-text' },
             { id: 'report/receiving-outstanding', label: 'Receiving Outstanding', icon: 'file-text' },

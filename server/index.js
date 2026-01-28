@@ -3487,6 +3487,254 @@ app.get('/api/reports/ar-aging', async (req, res) => {
   }
 });
 
+
+// ==================== SALES SUMMARY REPORT ====================
+app.get('/api/reports/sales-summary', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    // Group by Year-Month. Sybase: DATEFORMAT(date, 'yyyy-mm')
+    // Or just fetch all and aggregate in JS if SQL dialect is tricky.
+    // Let's try SQL aggregation:
+    // "SELECT YMD(YEAR(doc_date), MONTH(doc_date), 1) as period_date, SUM(quantity * unit_price) as total ..."
+
+    let query = `
+      SELECT 
+        YEAR(i.doc_date) as yr, 
+        MONTH(i.doc_date) as mth,
+        SUM(d.quantity * d.unit_price) as total_amount
+      FROM ARInvoices i
+      JOIN ARInvoiceDetails d ON i.id = d.ar_invoice_id
+      WHERE i.status != 'Cancelled'
+    `;
+    const params = [];
+
+    if (startDate && endDate) {
+      query += ` AND i.doc_date BETWEEN ? AND ?`;
+      params.push(startDate, endDate);
+    }
+
+    query += ` GROUP BY yr, mth ORDER BY yr ASC, mth ASC`;
+
+    const result = await executeQuery(query, params);
+
+    // Format result for frontend: "Jan 2026", etc.
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const formatted = result.map(r => ({
+      period: `${monthNames[r.mth - 1]} ${r.yr}`,
+      total: r.total_amount
+    }));
+
+    res.json({ success: true, data: formatted });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== PURCHASE SUMMARY REPORT ====================
+app.get('/api/reports/purchase-summary', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let query = `
+      SELECT 
+        YEAR(i.doc_date) as yr, 
+        MONTH(i.doc_date) as mth,
+        SUM(d.quantity * d.unit_price) as total_amount
+      FROM APInvoices i
+      JOIN APInvoiceDetails d ON i.id = d.ap_invoice_id
+      WHERE i.status != 'Cancelled'
+    `;
+    const params = [];
+
+    if (startDate && endDate) {
+      query += ` AND i.doc_date BETWEEN ? AND ?`;
+      params.push(startDate, endDate);
+    }
+
+    query += ` GROUP BY yr, mth ORDER BY yr ASC, mth ASC`;
+
+    const result = await executeQuery(query, params);
+
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const formatted = result.map(r => ({
+      period: `${monthNames[r.mth - 1]} ${r.yr}`,
+      total: r.total_amount
+    }));
+
+    res.json({ success: true, data: formatted });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// ==================== TRIAL BALANCE REPORT ====================
+app.get('/api/reports/trial-balance', async (req, res) => {
+  try {
+    const { endDate } = req.query; // Usually As Of Date
+    // If startDate provided, it's a movement trial balance. Let's assume As Of for standard TB.
+
+    let query = `
+        SELECT 
+            a.code, a.name, a.type,
+            SUM(ISNULL(jvd.debit, 0)) as total_debit,
+            SUM(ISNULL(jvd.credit, 0)) as total_credit
+        FROM Accounts a
+        LEFT JOIN JournalVoucherDetails jvd ON a.id = jvd.account_id
+        LEFT JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+    `;
+
+    const params = [];
+    let whereClause = " WHERE jv.status = 'Posted'";
+
+    if (endDate) {
+      whereClause += ` AND jv.doc_date <= ?`;
+      params.push(endDate);
+    }
+
+    // We need to group by account, but we only want to sum posted journals.
+    // The LEFT JOIN implies we might get nulls if no journals, which ISNULL handles.
+    // BUT we need to be careful: if we filter JV by date, we might filter out the Account if we put it in WHERE.
+    // Better to put JV condition in the JOIN or handle the WHERE carefully.
+
+    // Revised Query strategy:
+    // Select all accounts, Left Join with subquery of sums? Or just standard aggregate.
+    // If an account has no transaction, we typically still want to list it if it has opening balance (not implemented yet) or just list all.
+
+    query = `
+        SELECT 
+            a.code, a.name, a.type,
+            SUM(CASE WHEN jv.status = 'Posted' ${endDate ? 'AND jv.doc_date <= ?' : ''} THEN jvd.debit ELSE 0 END) as total_debit,
+            SUM(CASE WHEN jv.status = 'Posted' ${endDate ? 'AND jv.doc_date <= ?' : ''} THEN jvd.credit ELSE 0 END) as total_credit
+        FROM Accounts a
+        LEFT JOIN JournalVoucherDetails jvd ON a.id = jvd.coa_id
+        LEFT JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+        GROUP BY a.code, a.name, a.type
+        ORDER BY a.code ASC
+    `;
+
+    // We need to double the params because we used ? twice in the query string construction if endDate exists
+    const finalParams = [];
+    if (endDate) {
+      finalParams.push(endDate);
+      finalParams.push(endDate);
+    }
+
+    const result = await executeQuery(query, finalParams);
+
+    const data = result.map(row => {
+      const debit = parseFloat(row.total_debit || 0);
+      const credit = parseFloat(row.total_credit || 0);
+      const net = debit - credit;
+      return {
+        ...row,
+        debit,
+        credit,
+        net
+      };
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== PROFIT LOSS REPORT ====================
+app.get('/api/reports/profit-loss', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    // Revenue and Expense only
+    // Net = Credit - Debit for Revenue (since Revenue is credit normal)
+    // Net = Debit - Credit for Expense (since Expense is debit normal)
+    // Or just Raw Sums and let frontend display.
+
+    let query = `
+        SELECT 
+            a.code, a.name, a.type,
+            SUM(jvd.debit) as debit,
+            SUM(jvd.credit) as credit
+        FROM Accounts a
+        JOIN JournalVoucherDetails jvd ON a.id = jvd.coa_id
+        JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+        WHERE jv.status = 'Posted'
+        AND a.type IN ('REVENUE', 'EXPENSE')
+    `;
+
+    const params = [];
+
+    if (startDate && endDate) {
+      query += ` AND jv.doc_date BETWEEN ? AND ?`;
+      params.push(startDate, endDate);
+    }
+
+    query += ` GROUP BY a.code, a.name, a.type ORDER BY a.code ASC`;
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== BALANCE SHEET REPORT ====================
+app.get('/api/reports/balance-sheet', async (req, res) => {
+  try {
+    const { endDate } = req.query; // As Of
+
+    // 1. Get Assets, Liability, Equity balances
+    let query = `
+        SELECT 
+            a.code, a.name, a.type,
+            SUM(jvd.debit) as debit,
+            SUM(jvd.credit) as credit
+        FROM Accounts a
+        LEFT JOIN JournalVoucherDetails jvd ON a.id = jvd.coa_id
+        LEFT JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+        WHERE (jv.status = 'Posted' OR jv.id IS NULL)
+        AND a.type IN ('ASSET', 'LIABILITY', 'EQUITY')
+    `;
+
+    const params = [];
+    if (endDate) {
+      query += ` AND (jv.doc_date <= ? OR jv.doc_date IS NULL)`;
+      params.push(endDate);
+    }
+
+    query += ` GROUP BY a.code, a.name, a.type ORDER BY a.code ASC`;
+
+    const accounts = await executeQuery(query, params);
+
+    // 2. Calculate Current Year Earnings (Net Income) up to endDate
+    // (Revenue - Expense)
+    // Revenue is Credit, Expense is Debit.
+    // Net Income = (Total Credit Revenue - Total Debit Revenue) - (Total Debit Expense - Total Credit Expense)
+    // Simplified: Sum(Credit) - Sum(Debit) for all Rev/Exp accounts. (Since Rev > Exp means Credit > Debit)
+
+    let plQuery = `
+        SELECT SUM(jvd.credit - jvd.debit) as net_income
+        FROM Accounts a
+        JOIN JournalVoucherDetails jvd ON a.id = jvd.coa_id
+        JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+        WHERE jv.status = 'Posted'
+        AND a.type IN ('REVENUE', 'EXPENSE')
+    `;
+
+    const plParams = [];
+    if (endDate) {
+      plQuery += ` AND jv.doc_date <= ?`;
+      plParams.push(endDate);
+    }
+
+    const plResult = await executeQuery(plQuery, plParams);
+    const netIncome = plResult[0].net_income || 0;
+
+    res.json({ success: true, data: { accounts, netIncome } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`🚀 Server berjalan di http://localhost:${PORT}`);

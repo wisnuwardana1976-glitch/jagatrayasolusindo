@@ -32,6 +32,11 @@ import APOutstandingReport from './pages/report/APOutstandingReport';
 import AROutstandingReport from './pages/report/AROutstandingReport';
 import APAgingReport from './pages/report/APAgingReport';
 import ARAgingReport from './pages/report/ARAgingReport';
+import SalesReport from './pages/report/SalesReport';
+import PurchaseReport from './pages/report/PurchaseReport';
+import TrialBalanceReport from './pages/report/TrialBalanceReport';
+import ProfitLossReport from './pages/report/ProfitLossReport';
+import BalanceSheetReport from './pages/report/BalanceSheetReport';
 import GlSettings from './pages/settings/GlSettings';
 import SystemGeneratedJournalList from './pages/finance/SystemGeneratedJournalList';
 import CashList from './pages/finance/CashList';
@@ -112,6 +117,16 @@ function App() {
                 return <MenuSettings />;
             case 'payment-term':
                 return <PaymentTermList />;
+            case 'report/sales-summary':
+                return <SalesReport />;
+            case 'report/purchase-summary':
+                return <PurchaseReport />;
+            case 'report/trial-balance':
+                return <TrialBalanceReport />;
+            case 'report/profit-loss':
+                return <ProfitLossReport />;
+            case 'report/balance-sheet':
+                return <BalanceSheetReport />;
             case 'report/po-outstanding':
                 return <POOutstandingReport />;
             case 'report/so-outstanding':
