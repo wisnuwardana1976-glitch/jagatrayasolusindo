@@ -546,13 +546,11 @@ app.get('/api/shipments', async (req, res) => {
                 s.*,
                 so.doc_number as so_number,
                 p.name as partner_name,
-                l.name as location_name,
                 (SELECT SUM(quantity) FROM ShipmentDetails WHERE shipment_id = s.id) as total_shipped,
-                (SELECT SUM(quantity) FROM ARInvoiceDetails ard JOIN ARInvoices ari ON ard.invoice_id = ari.id WHERE ari.shipment_id = s.id AND ari.status != 'Cancelled') as total_billed
+                (SELECT SUM(quantity) FROM ARInvoiceDetails ard JOIN ARInvoices ari ON ard.ar_invoice_id = ari.id WHERE ari.shipment_id = s.id AND ari.status != 'Cancelled') as total_billed
             FROM Shipments s
             LEFT JOIN SalesOrders so ON s.so_id = so.id
             LEFT JOIN Partners p ON so.partner_id = p.id
-            LEFT JOIN Locations l ON s.location_id = l.id
         `;
 
     const params = [];
@@ -1908,7 +1906,7 @@ app.get('/api/receivings', async (req, res) => {
                 p.name as partner_name,
                 l.name as location_name,
                 (SELECT SUM(quantity) FROM ReceivingDetails WHERE receiving_id = rec.id) as total_received,
-                (SELECT SUM(quantity) FROM APInvoiceDetails ad JOIN APInvoices ai ON ad.invoice_id = ai.id WHERE ai.receiving_id = rec.id AND ai.status != 'Cancelled') as total_billed
+                (SELECT SUM(quantity) FROM APInvoiceDetails ad JOIN APInvoices ai ON ad.ap_invoice_id = ai.id WHERE ai.receiving_id = rec.id AND ai.status != 'Cancelled') as total_billed
             FROM Receivings rec
             LEFT JOIN PurchaseOrders po ON rec.po_id = po.id
             LEFT JOIN Partners p ON po.partner_id = p.id

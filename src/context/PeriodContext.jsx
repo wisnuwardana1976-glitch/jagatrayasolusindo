@@ -32,11 +32,23 @@ export const PeriodProvider = ({ children }) => {
             if (data.success) {
                 setPeriods(data.data);
 
-                // If no period selected, try to select the current active one
+                // If no period selected, try to select the current active one based on today's date
                 if (!selectedPeriod && data.data.length > 0) {
-                    const active = data.data.find(p => p.status === 'Open');
-                    if (active) {
-                        setSelectedPeriod(active);
+                    const today = new Date().toISOString().split('T')[0];
+                    const currentPeriod = data.data.find(p =>
+                        p.status === 'Open' &&
+                        today >= p.start_date.split('T')[0] &&
+                        today <= p.end_date.split('T')[0]
+                    );
+
+                    if (currentPeriod) {
+                        setSelectedPeriod(currentPeriod);
+                    } else {
+                        // Fallback: Find the most recent open period
+                        const active = data.data.find(p => p.status === 'Open');
+                        if (active) {
+                            setSelectedPeriod(active);
+                        }
                     }
                 }
             }
