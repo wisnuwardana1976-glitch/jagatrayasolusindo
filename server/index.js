@@ -3,7 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import odbc from 'odbc';
 import fs from 'fs';
+import path from 'path';
+import { exec } from 'child_process';
+import { fileURLToPath } from 'url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const logDebug = (msg) => {
   const timestamp = new Date().toISOString();
   fs.appendFileSync('journal_debug.log', `[${timestamp}] ${msg}\n`);
@@ -3813,9 +3818,111 @@ app.get('/api/reports/balance-sheet', async (req, res) => {
   }
 });
 
+// ==================== CRYSTAL REPORTS ====================
+app.get('/api/crystal-reports', async (req, res) => {
+  try {
+    const reportDir = path.join(__dirname, '..', 'Report');
+
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(reportDir)) {
+      fs.mkdirSync(reportDir, { recursive: true });
+    }
+
+    const files = fs.readdirSync(reportDir);
+    const rptFiles = files.filter(file => file.toLowerCase().endsWith('.rpt'));
+
+    res.json({ success: true, data: rptFiles });
+  } catch (error) {
+    console.error('Error listing Crystal Reports:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/crystal-reports/open', async (req, res) => {
+  try {
+    const { filename } = req.body;
+    if (!filename) {
+      return res.status(400).json({ success: false, error: 'Filename is required' });
+    }
+
+    const reportPath = path.join(__dirname, '..', 'Report', filename);
+
+    // Security check: ensure the file is actually inside the Report directory to prevent directory traversal
+    const reportDir = path.join(__dirname, '..', 'Report');
+    if (!path.resolve(reportPath).startsWith(path.resolve(reportDir))) {
+      return res.status(400).json({ success: false, error: 'Invalid file path' });
+    }
+
+    if (!fs.existsSync(reportPath)) {
+      return res.status(404).json({ success: false, error: 'Report file not found' });
+    }
+
+    // Windows command to open file with default application
+    const command = `start "" "${reportPath}"`;
+
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error opening file: ${error}`);
+        return res.status(500).json({ success: false, error: 'Failed to open report' });
+      }
+      res.json({ success: true, message: `Membuka laporan: ${filename}` });
+    });
+
+  } catch (error) {
+    console.error('Error opening Crystal Report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== REPORT DEFINITIONS (STANDARD LIST) ====================
+app.get('/api/reports/definitions', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM ReportDefinitions ORDER BY report_code');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/reports/definitions', async (req, res) => {
+  try {
+    const { report_code, module, category, report_type, name, file_name } = req.body;
+    await executeQuery(
+      'INSERT INTO ReportDefinitions (report_code, module, category, report_type, name, file_name) VALUES (?, ?, ?, ?, ?, ?)',
+      [report_code, module, category, report_type, name, file_name]
+    );
+    res.json({ success: true, message: 'Report definition created' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/reports/definitions/:id', async (req, res) => {
+  try {
+    const { report_code, module, category, report_type, name, file_name } = req.body;
+    await executeQuery(
+      'UPDATE ReportDefinitions SET report_code = ?, module = ?, category = ?, report_type = ?, name = ?, file_name = ? WHERE id = ?',
+      [report_code, module, category, report_type, name, file_name, req.params.id]
+    );
+    res.json({ success: true, message: 'Report definition updated' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/reports/definitions/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM ReportDefinitions WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Report definition deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`🚀 Server berjalan di http://localhost:${PORT}`);
+  console.log('✅ Crystal Reports & ReportDefinitions Endpoints Ready');
   await connectDatabase();
 });
 

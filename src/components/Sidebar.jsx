@@ -69,6 +69,7 @@ const menuItems = [
             { id: 'report/ar-outstanding', label: 'AR Outstanding', icon: 'file-text' },
             { id: 'report/ap-aging', label: 'AP Aging', icon: 'file-text' },
             { id: 'report/ar-aging', label: 'AR Aging', icon: 'file-text' },
+            { id: 'report/crystal-reports', label: 'Crystal Reports', icon: 'file-text' },
         ],
     },
     {
