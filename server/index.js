@@ -3570,70 +3570,148 @@ app.get('/api/reports/purchase-summary', async (req, res) => {
 // ==================== TRIAL BALANCE REPORT ====================
 app.get('/api/reports/trial-balance', async (req, res) => {
   try {
-    const { endDate } = req.query; // Usually As Of Date
-    // If startDate provided, it's a movement trial balance. Let's assume As Of for standard TB.
+    const { startDate, endDate } = req.query;
 
-    let query = `
-        SELECT 
-            a.code, a.name, a.type,
-            SUM(ISNULL(jvd.debit, 0)) as total_debit,
-            SUM(ISNULL(jvd.credit, 0)) as total_credit
-        FROM Accounts a
-        LEFT JOIN JournalVoucherDetails jvd ON a.id = jvd.account_id
-        LEFT JOIN JournalVouchers jv ON jvd.jv_id = jv.id
-    `;
-
-    const params = [];
-    let whereClause = " WHERE jv.status = 'Posted'";
-
-    if (endDate) {
-      whereClause += ` AND jv.doc_date <= ?`;
-      params.push(endDate);
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate dan endDate harus diisi' });
     }
 
-    // We need to group by account, but we only want to sum posted journals.
-    // The LEFT JOIN implies we might get nulls if no journals, which ISNULL handles.
-    // BUT we need to be careful: if we filter JV by date, we might filter out the Account if we put it in WHERE.
-    // Better to put JV condition in the JOIN or handle the WHERE carefully.
+    // Query untuk mengambil saldo awal dan pergerakan
+    // Saldo Awal: Semua transaksi SEBELUM startDate
+    // Pergerakan: Semua transaksi ANTARA startDate dan endDate (inklusif)
 
-    // Revised Query strategy:
-    // Select all accounts, Left Join with subquery of sums? Or just standard aggregate.
-    // If an account has no transaction, we typically still want to list it if it has opening balance (not implemented yet) or just list all.
+    // Perbaikan Logika:
+    // Debit selalu menambah aset/beban, Kredit mengurangi.
+    // Untuk laporan Trial Balance standar, kita tampilkan total Debit dan Kredit per akun
+    // Tapi user minta Saldo Awal dan Saldo Akhir.
 
-    query = `
-        SELECT 
-            a.code, a.name, a.type,
-            SUM(CASE WHEN jv.status = 'Posted' ${endDate ? 'AND jv.doc_date <= ?' : ''} THEN jvd.debit ELSE 0 END) as total_debit,
-            SUM(CASE WHEN jv.status = 'Posted' ${endDate ? 'AND jv.doc_date <= ?' : ''} THEN jvd.credit ELSE 0 END) as total_credit
-        FROM Accounts a
-        LEFT JOIN JournalVoucherDetails jvd ON a.id = jvd.coa_id
-        LEFT JOIN JournalVouchers jv ON jvd.jv_id = jv.id
-        GROUP BY a.code, a.name, a.type
-        ORDER BY a.code ASC
+    const query = `
+      SELECT 
+        a.id, a.code, a.name, a.type,
+        
+        -- Saldo Awal (sebelum startDate)
+        SUM(CASE 
+            WHEN jv.doc_date < ? AND jv.status = 'Posted' THEN jvd.debit 
+            ELSE 0 
+        END) as initial_debit,
+        
+        SUM(CASE 
+            WHEN jv.doc_date < ? AND jv.status = 'Posted' THEN jvd.credit 
+            ELSE 0 
+        END) as initial_credit,
+
+        -- Pergerakan (start s/d end)
+        SUM(CASE 
+            WHEN jv.doc_date >= ? AND jv.doc_date <= ? AND jv.status = 'Posted' THEN jvd.debit 
+            ELSE 0 
+        END) as movement_debit,
+        
+        SUM(CASE 
+            WHEN jv.doc_date >= ? AND jv.doc_date <= ? AND jv.status = 'Posted' THEN jvd.credit 
+            ELSE 0 
+        END) as movement_credit
+
+      FROM Accounts a
+      LEFT JOIN JournalVoucherDetails jvd ON a.id = jvd.coa_id
+      LEFT JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+      GROUP BY a.id, a.code, a.name, a.type
+      ORDER BY a.code ASC
     `;
 
-    // We need to double the params because we used ? twice in the query string construction if endDate exists
-    const finalParams = [];
-    if (endDate) {
-      finalParams.push(endDate);
-      finalParams.push(endDate);
+    const params = [
+      startDate, startDate, // Initial
+      startDate, endDate,   // Movement Debit
+      startDate, endDate    // Movement Credit
+    ];
+
+    const result = await executeQuery(query, params);
+
+    // Debugging: Log raw result from database
+    if (result.length > 0) {
+      console.log('Trial Balance Raw Row 0:', result[0]);
     }
 
-    const result = await executeQuery(query, finalParams);
+    const safeFloat = (val) => {
+      if (val === null || val === undefined) return 0;
+      const num = Number(val);
+      return isNaN(num) ? 0 : num;
+    };
 
     const data = result.map(row => {
-      const debit = parseFloat(row.total_debit || 0);
-      const credit = parseFloat(row.total_credit || 0);
-      const net = debit - credit;
+      // Handle case-insensitive column names
+      const getVal = (key) => row[key] !== undefined ? row[key] : row[key.toUpperCase()];
+
+      const initDebit = safeFloat(getVal('initial_debit'));
+      const initCredit = safeFloat(getVal('initial_credit'));
+      const moveDebit = safeFloat(getVal('movement_debit'));
+      const moveCredit = safeFloat(getVal('movement_credit'));
+
+      // Hitung Net Saldo Awal berdasarkan tipe akun
+      // ASSET, EXPENSE: Debit - Credit
+      // LIABILITY, EQUITY, REVENUE: Credit - Debit
+
+      let initialBalance = 0;
+      if (['ASSET', 'EXPENSE'].includes(row.type)) {
+        initialBalance = initDebit - initCredit;
+      } else {
+        initialBalance = initCredit - initDebit;
+      }
+
+      // Hitung Saldo Akhir
+      // Saldo Akhir = Saldo Awal + (Debit Mut - Credit Mut) [jika normal debit]
+      // Saldo Akhir = Saldo Awal + (Credit Mut - Debit Mut) [jika normal credit]
+
+      let endingBalance = 0;
+      if (['ASSET', 'EXPENSE'].includes(row.type)) {
+        endingBalance = initialBalance + (moveDebit - moveCredit);
+      } else {
+        endingBalance = initialBalance + (moveCredit - moveDebit);
+      }
+
       return {
         ...row,
-        debit,
-        credit,
-        net
+        initial_balance: initialBalance,
+        movement_debit: moveDebit,
+        movement_credit: moveCredit,
+        ending_balance: endingBalance
       };
     });
 
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== ACCOUNT TRANSACTION DETAILS (DRILL DOWN) ====================
+app.get('/api/reports/account-transactions', async (req, res) => {
+  try {
+    const { accountId, startDate, endDate } = req.query;
+
+    if (!accountId || !startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'Parameter accountId, startDate, dan endDate wajib diisi' });
+    }
+
+    const query = `
+        SELECT 
+            jv.doc_date,
+            jv.doc_number,
+            jvd.description,
+            jvd.debit,
+            jvd.credit,
+            jv.source_type,
+            jv.ref_id
+        FROM JournalVoucherDetails jvd
+        JOIN JournalVouchers jv ON jvd.jv_id = jv.id
+        WHERE jvd.coa_id = ?
+        AND jv.doc_date >= ?
+        AND jv.doc_date <= ?
+        AND jv.status = 'Posted'
+        ORDER BY jv.doc_date ASC, jv.doc_number ASC
+    `;
+
+    const result = await executeQuery(query, [accountId, startDate, endDate]);
+    res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
