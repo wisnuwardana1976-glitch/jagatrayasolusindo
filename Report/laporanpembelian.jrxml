@@ -1,0 +1,122 @@
+<!-- Created with Jaspersoft Studio version 7.0.3.final using JasperReports Library version 7.0.3-41034ca841d452f3305ba55b9042260aaa1ab5dd  -->
+<jasperReport name="laporanpembelian" language="java" pageWidth="595" pageHeight="842" columnWidth="555" leftMargin="20" rightMargin="20" topMargin="20" bottomMargin="20" uuid="c97de806-906f-4288-bc66-a996e19f6e20">
+	<property name="com.jaspersoft.studio.data.sql.tables" value=""/>
+	<property name="com.jaspersoft.studio.data.defaultdataadapter" value="Jagat"/>
+	<property name="com.jaspersoft.studio.data.sql.SQLQueryDesigner.sash.w1" value="299"/>
+	<property name="com.jaspersoft.studio.data.sql.SQLQueryDesigner.sash.w2" value="692"/>
+	<parameter name="Stardate" class="java.util.Date"/>
+	<parameter name="ToDate" class="java.util.Date"/>
+	<query language="SQL"><![CDATA[select * from APInvoices as a join APInvoiceDetails as b where b.ap_invoice_id = a.id and doc_date between $P{Stardate} and $P{ToDate}]]></query>
+	<field name="doc_number" class="java.lang.String">
+		<property name="com.jaspersoft.studio.field.name" value="doc_number"/>
+		<property name="com.jaspersoft.studio.field.label" value="doc_number"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoices"/>
+	</field>
+	<field name="doc_date" class="java.sql.Date">
+		<property name="com.jaspersoft.studio.field.name" value="doc_date"/>
+		<property name="com.jaspersoft.studio.field.label" value="doc_date"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoices"/>
+	</field>
+	<field name="due_date" class="java.sql.Date">
+		<property name="com.jaspersoft.studio.field.name" value="due_date"/>
+		<property name="com.jaspersoft.studio.field.label" value="due_date"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoices"/>
+	</field>
+	<field name="partner_id" class="java.lang.Integer">
+		<property name="com.jaspersoft.studio.field.name" value="partner_id"/>
+		<property name="com.jaspersoft.studio.field.label" value="partner_id"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoices"/>
+	</field>
+	<field name="item_id" class="java.lang.Integer">
+		<property name="com.jaspersoft.studio.field.name" value="item_id"/>
+		<property name="com.jaspersoft.studio.field.label" value="item_id"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoiceDetails"/>
+	</field>
+	<field name="quantity" class="java.math.BigDecimal">
+		<property name="com.jaspersoft.studio.field.name" value="quantity"/>
+		<property name="com.jaspersoft.studio.field.label" value="quantity"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoiceDetails"/>
+	</field>
+	<field name="unit_price" class="java.math.BigDecimal">
+		<property name="com.jaspersoft.studio.field.name" value="unit_price"/>
+		<property name="com.jaspersoft.studio.field.label" value="unit_price"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoiceDetails"/>
+	</field>
+	<field name="amount" class="java.math.BigDecimal">
+		<property name="com.jaspersoft.studio.field.name" value="amount"/>
+		<property name="com.jaspersoft.studio.field.label" value="amount"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="APInvoiceDetails"/>
+	</field>
+	<group name="doc_number">
+		<expression><![CDATA[$F{doc_number}]]></expression>
+	</group>
+	<group name="doc_date">
+		<expression><![CDATA[$F{doc_date}]]></expression>
+	</group>
+	<group name="due_date">
+		<expression><![CDATA[$F{due_date}]]></expression>
+	</group>
+	<group name="partner_id">
+		<expression><![CDATA[$F{partner_id}]]></expression>
+	</group>
+	<group name="item_id">
+		<expression><![CDATA[$F{item_id}]]></expression>
+	</group>
+	<group name="quantity">
+		<expression><![CDATA[$F{quantity}]]></expression>
+	</group>
+	<group name="unit_price">
+		<expression><![CDATA[$F{unit_price}]]></expression>
+	</group>
+	<group name="amount">
+		<expression><![CDATA[$F{amount}]]></expression>
+	</group>
+	<background splitType="Stretch"/>
+	<title height="79" splitType="Stretch">
+		<element kind="textField" uuid="d27c71ae-be23-4419-9b68-6b2a7c82290f" x="-10" y="40" width="210" height="30" bold="true">
+			<expression><![CDATA["LAPORAN PEMBELIAN"]]></expression>
+		</element>
+	</title>
+	<pageHeader height="35" splitType="Stretch"/>
+	<columnHeader height="61" splitType="Stretch">
+		<element kind="staticText" uuid="b0d59170-3221-498f-86ff-f850274d3917" x="77" y="0" width="100" height="30">
+			<text><![CDATA[doc_number]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="45daf28f-5706-4300-88a2-8f5951ce3212"/>
+		</element>
+		<element kind="staticText" uuid="b9ee95de-5c3f-4d25-bd2c-a20e1ca8923d" x="164" y="0" width="100" height="30">
+			<text><![CDATA[doc_date]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="170c8ef8-5e14-4cec-83ec-083c51583557"/>
+		</element>
+		<element kind="staticText" uuid="fcf9506b-e011-4857-95f0-7d342fd9080c" x="258" y="0" width="100" height="30">
+			<text><![CDATA[item_id]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="6c03d152-78b3-4218-a73f-792a428d1d70"/>
+		</element>
+		<element kind="staticText" uuid="85f72c52-f12b-4afe-b653-aacd8150303d" x="413" y="0" width="100" height="30">
+			<text><![CDATA[quantity]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="d6a7bde7-6724-416a-b3af-695bd8752937"/>
+		</element>
+	</columnHeader>
+	<detail>
+		<band height="45" splitType="Stretch">
+			<element kind="textField" uuid="ec4b1308-2ad2-4e6b-9c6a-141c78996f58" x="-10" y="10" width="100" height="30">
+				<expression><![CDATA[$F{doc_number}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="45daf28f-5706-4300-88a2-8f5951ce3212"/>
+			</element>
+			<element kind="textField" uuid="0cb8d1dd-8fbd-40be-ac77-627beb3364a0" x="110" y="10" width="100" height="30">
+				<expression><![CDATA[$F{doc_date}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="170c8ef8-5e14-4cec-83ec-083c51583557"/>
+			</element>
+			<element kind="textField" uuid="6707806d-f8ed-4247-b619-415ddb01fd63" x="250" y="10" width="100" height="30">
+				<expression><![CDATA[$F{item_id}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="6c03d152-78b3-4218-a73f-792a428d1d70"/>
+			</element>
+			<element kind="textField" uuid="802e19f3-d494-4f6b-8119-0c79e676dd27" x="340" y="10" width="100" height="20">
+				<expression><![CDATA[$F{quantity}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="d6a7bde7-6724-416a-b3af-695bd8752937"/>
+			</element>
+		</band>
+	</detail>
+	<columnFooter height="45" splitType="Stretch"/>
+	<pageFooter height="54" splitType="Stretch"/>
+	<summary height="42" splitType="Stretch"/>
+</jasperReport>

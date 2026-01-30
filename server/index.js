@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
+import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3857,19 +3858,205 @@ app.post('/api/crystal-reports/open', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Report file not found' });
     }
 
-    // Windows command to open file with default application
-    const command = `start "" "${reportPath}"`;
+    // Use Crystal Reports 11 Designer directly (can connect to database)
+    const crystalDesignerPath = 'C:\\Program Files (x86)\\Business Objects\\Crystal Reports 11\\crw32.exe';
+
+    // Check if Crystal Reports Designer exists
+    if (!fs.existsSync(crystalDesignerPath)) {
+      // Fallback to default application if Designer not found
+      const command = `start "" "${reportPath}"`;
+      exec(command, (error) => {
+        if (error) {
+          console.error(`Error opening file: ${error}`);
+          return res.status(500).json({ success: false, error: 'Failed to open report' });
+        }
+        res.json({ success: true, message: `Membuka laporan: ${filename}` });
+      });
+      return;
+    }
+
+    // Open with Crystal Reports 11 Designer
+    const command = `"${crystalDesignerPath}" "${reportPath}"`;
 
     exec(command, (error) => {
       if (error) {
-        console.error(`Error opening file: ${error}`);
-        return res.status(500).json({ success: false, error: 'Failed to open report' });
+        console.error(`Error opening file with Crystal Reports Designer: ${error}`);
+        return res.status(500).json({ success: false, error: 'Failed to open report with Crystal Reports Designer' });
       }
-      res.json({ success: true, message: `Membuka laporan: ${filename}` });
+      res.json({ success: true, message: `Membuka laporan dengan Crystal Reports Designer: ${filename}` });
     });
 
   } catch (error) {
     console.error('Error opening Crystal Report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== JASPER REPORTS PDF GENERATION ====================
+app.get('/api/reports/pdf', async (req, res) => {
+  try {
+    const { filename, startDate, endDate } = req.query;
+
+    if (!filename) {
+      return res.status(400).json({ success: false, error: 'Filename is required' });
+    }
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'Start date and end date are required' });
+    }
+
+    console.log(`Generating report: ${filename} with params: ${startDate} to ${endDate}`);
+
+    // Query data based on the report filename
+    let reportData = [];
+    let reportTitle = 'Laporan';
+    let columns = [];
+
+    // Determine query based on report file
+    if (filename.toLowerCase().includes('pembelian') || filename.toLowerCase().includes('ap')) {
+      reportTitle = 'LAPORAN PEMBELIAN';
+      columns = ['No Dokumen', 'Tanggal', 'Supplier', 'Item', 'Qty', 'Harga', 'Jumlah'];
+
+      const query = `
+        SELECT 
+          a.doc_number,
+          a.doc_date,
+          p.name as partner_name,
+          i.name as item_name,
+          b.quantity,
+          b.unit_price,
+          (b.quantity * b.unit_price) as amount
+        FROM APInvoices a
+        JOIN APInvoiceDetails b ON b.ap_invoice_id = a.id
+        LEFT JOIN Partners p ON a.partner_id = p.id
+        LEFT JOIN Items i ON b.item_id = i.id
+        WHERE a.doc_date BETWEEN ? AND ?
+        ORDER BY a.doc_date, a.doc_number
+      `;
+
+      reportData = await executeQuery(query, [startDate, endDate]);
+    } else {
+      // Generic query for other reports
+      reportTitle = 'LAPORAN';
+      columns = ['Data'];
+      reportData = [];
+    }
+
+    // Generate PDF using pdfkit
+    const doc = new PDFDocument({
+      margin: 50,
+      size: 'A4',
+      layout: 'landscape'
+    });
+
+    // Set response headers for PDF
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename.replace('.jrxml', '.pdf')}"`);
+
+    // Pipe the PDF to response
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(16).font('Helvetica-Bold').text(reportTitle, { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).font('Helvetica').text(`Periode: ${startDate} s/d ${endDate}`, { align: 'center' });
+    doc.moveDown(1);
+
+    // Table settings
+    const tableTop = 120;
+    const tableLeft = 50;
+    const rowHeight = 20;
+    const pageWidth = doc.page.width - 100;
+
+    // Column widths for pembelian report
+    const colWidths = [90, 70, 120, 150, 60, 80, 80];
+
+    // Draw table header
+    doc.font('Helvetica-Bold').fontSize(9);
+    let xPos = tableLeft;
+
+    columns.forEach((col, i) => {
+      doc.rect(xPos, tableTop, colWidths[i], rowHeight).stroke();
+      doc.text(col, xPos + 5, tableTop + 5, { width: colWidths[i] - 10 });
+      xPos += colWidths[i];
+    });
+
+    // Draw table rows
+    doc.font('Helvetica').fontSize(8);
+    let yPos = tableTop + rowHeight;
+    let totalAmount = 0;
+    let rowCount = 0;
+    const maxRowsPerPage = 25;
+
+    reportData.forEach((row) => {
+      // Check if new page needed
+      if (rowCount >= maxRowsPerPage) {
+        doc.addPage({ layout: 'landscape' });
+        yPos = 50;
+        rowCount = 0;
+
+        // Redraw header on new page
+        doc.font('Helvetica-Bold').fontSize(9);
+        xPos = tableLeft;
+        columns.forEach((col, i) => {
+          doc.rect(xPos, yPos, colWidths[i], rowHeight).stroke();
+          doc.text(col, xPos + 5, yPos + 5, { width: colWidths[i] - 10 });
+          xPos += colWidths[i];
+        });
+        yPos += rowHeight;
+        doc.font('Helvetica').fontSize(8);
+      }
+
+      xPos = tableLeft;
+      const values = [
+        row.doc_number || '',
+        row.doc_date ? new Date(row.doc_date).toLocaleDateString('id-ID') : '',
+        row.partner_name || '',
+        row.item_name || '',
+        Number(row.quantity || 0).toLocaleString('id-ID'),
+        Number(row.unit_price || 0).toLocaleString('id-ID'),
+        Number(row.amount || 0).toLocaleString('id-ID')
+      ];
+
+      values.forEach((val, i) => {
+        doc.rect(xPos, yPos, colWidths[i], rowHeight).stroke();
+        const align = i >= 4 ? 'right' : 'left';
+        doc.text(String(val), xPos + 5, yPos + 5, { width: colWidths[i] - 10, align });
+        xPos += colWidths[i];
+      });
+
+      totalAmount += Number(row.amount || 0);
+      yPos += rowHeight;
+      rowCount++;
+    });
+
+    // Total row
+    if (reportData.length > 0) {
+      xPos = tableLeft;
+      doc.font('Helvetica-Bold');
+
+      // Merge first 6 columns for "Total" label
+      const totalLabelWidth = colWidths.slice(0, 6).reduce((a, b) => a + b, 0);
+      doc.rect(xPos, yPos, totalLabelWidth, rowHeight).stroke();
+      doc.text('TOTAL', xPos + 5, yPos + 5, { width: totalLabelWidth - 10, align: 'right' });
+      xPos += totalLabelWidth;
+
+      // Amount column
+      doc.rect(xPos, yPos, colWidths[6], rowHeight).stroke();
+      doc.text(totalAmount.toLocaleString('id-ID'), xPos + 5, yPos + 5, { width: colWidths[6] - 10, align: 'right' });
+    }
+
+    // Footer
+    doc.moveDown(2);
+    doc.fontSize(8).font('Helvetica');
+    doc.text(`Dicetak pada: ${new Date().toLocaleString('id-ID')}`, tableLeft);
+    doc.text(`Total Record: ${reportData.length}`, tableLeft);
+
+    // Finalize PDF
+    doc.end();
+
+  } catch (error) {
+    console.error('Error generating Jasper Report PDF:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

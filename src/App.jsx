@@ -43,7 +43,7 @@ import CashList from './pages/finance/CashList';
 import BankList from './pages/finance/BankList';
 import JournalVoucherList from './pages/finance/JournalVoucherList';
 import RecalculateInventory from './pages/inventory/RecalculateInventory';
-import CrystalReports from './pages/report/CrystalReports';
+import JasperReports from './pages/report/JasperReports';
 import './index.css';
 
 import { PeriodProvider } from './context/PeriodContext';
@@ -145,7 +145,7 @@ function App() {
             case 'report/ar-aging':
                 return <ARAgingReport />;
             case 'report/crystal-reports':
-                return <CrystalReports setCurrentPage={setCurrentPage} />;
+                return <JasperReports setCurrentPage={setCurrentPage} />;
             case 'gl-settings':
                 return <GlSettings />;
             case 'system-generated-journal':
