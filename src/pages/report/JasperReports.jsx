@@ -82,15 +82,17 @@ function JasperReports() {
         setShowParamModal(false);
 
         try {
-            // Use GET with query parameters and open in new window to avoid blocking
+            // Build PDF URL with query parameters
             const params = new URLSearchParams({
                 filename: report.file_name,
                 startDate: reportParams.startDate,
                 endDate: reportParams.endDate
             });
 
-            // Open PDF in new window/tab
-            window.open(`http://localhost:3001/api/reports/pdf?${params.toString()}`, '_blank');
+            // Set URL for preview in iframe modal
+            const pdfUrlStr = `http://localhost:3001/api/reports/pdf?${params.toString()}`;
+            setPdfUrl(pdfUrlStr);
+            setShowPdfPreview(true);
 
         } catch (err) {
             alert(`Terjadi kesalahan: ${err.message}`);
@@ -101,10 +103,7 @@ function JasperReports() {
 
     const handleClosePdfPreview = () => {
         setShowPdfPreview(false);
-        if (pdfUrl) {
-            URL.revokeObjectURL(pdfUrl);
-            setPdfUrl(null);
-        }
+        setPdfUrl(null);
     };
 
     const handleDelete = async () => {
@@ -468,32 +467,57 @@ function JasperReports() {
     if (showPdfPreview && pdfUrl) {
         return (
             <div style={modalOverlayStyle}>
-                <div style={pdfModalStyle}>
+                <div style={{ ...modalContentStyle, maxWidth: '500px' }}>
                     <div style={modalHeaderStyle}>
                         <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#111827', margin: 0 }}>
-                            Preview Laporan
+                            Laporan Siap
                         </h2>
-                        <div style={{ display: 'flex', gap: '1rem' }}>
+                        <button
+                            onClick={handleClosePdfPreview}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.5rem', color: '#9ca3af' }}
+                        >
+                            &times;
+                        </button>
+                    </div>
+                    <div style={{ padding: '2rem', textAlign: 'center' }}>
+                        <div style={{ marginBottom: '2rem' }}>
+                            <svg style={{ width: '64px', height: '64px', margin: '0 auto', color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <p style={{ marginTop: '1rem', fontSize: '1rem', color: '#374151' }}>
+                                PDF laporan berhasil dibuat!
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <a
+                                href={pdfUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                    ...getBtnStyle('primary', false, true),
+                                    textDecoration: 'none',
+                                    display: 'block',
+                                    textAlign: 'center',
+                                    padding: '1rem'
+                                }}
+                            >
+                                📄 Lihat PDF
+                            </a>
                             <a
                                 href={pdfUrl}
                                 download="laporan.pdf"
-                                style={{ ...getBtnStyle('secondary', false, true), textDecoration: 'none' }}
+                                style={{
+                                    ...getBtnStyle('secondary', false, true),
+                                    textDecoration: 'none',
+                                    display: 'block',
+                                    textAlign: 'center',
+                                    padding: '1rem'
+                                }}
                             >
-                                Download PDF
+                                ⬇️ Download PDF
                             </a>
-                            <button
-                                onClick={handleClosePdfPreview}
-                                style={getBtnStyle('primary', false, true)}
-                            >
-                                Tutup
-                            </button>
                         </div>
                     </div>
-                    <iframe
-                        src={pdfUrl}
-                        style={pdfIframeStyle}
-                        title="PDF Preview"
-                    />
                 </div>
             </div>
         );
