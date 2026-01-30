@@ -52,6 +52,9 @@ function CrystalReports() {
 
         setProcessing(true);
         try {
+            // Option 3: Launch report using backend API (Direct Open on Server)
+            // This will execute 'start filename.rpt' on the server machine.
+            // If the server is running on localhost, this will open the desktop viewer without downloading.
             const response = await fetch('http://localhost:3001/api/crystal-reports/open', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -60,7 +63,7 @@ function CrystalReports() {
             const result = await response.json();
 
             if (result.success) {
-                alert(`Berhasil membuka laporan: ${report.name}`);
+                // Success - viewer should launch
             } else {
                 alert(`Gagal membuka laporan: ${result.error}`);
             }

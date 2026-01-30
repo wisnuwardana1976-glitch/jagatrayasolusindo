@@ -3821,7 +3821,7 @@ app.get('/api/reports/balance-sheet', async (req, res) => {
 // ==================== CRYSTAL REPORTS ====================
 app.get('/api/crystal-reports', async (req, res) => {
   try {
-    const reportDir = path.join(__dirname, '..', 'Report');
+    const reportDir = path.join(__dirname, '..', 'public', 'report');
 
     // Create directory if it doesn't exist
     if (!fs.existsSync(reportDir)) {
@@ -3845,10 +3845,10 @@ app.post('/api/crystal-reports/open', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Filename is required' });
     }
 
-    const reportPath = path.join(__dirname, '..', 'Report', filename);
+    const reportPath = path.join(__dirname, '..', 'public', 'Report', filename);
 
     // Security check: ensure the file is actually inside the Report directory to prevent directory traversal
-    const reportDir = path.join(__dirname, '..', 'Report');
+    const reportDir = path.join(__dirname, '..', 'public', 'Report');
     if (!path.resolve(reportPath).startsWith(path.resolve(reportDir))) {
       return res.status(400).json({ success: false, error: 'Invalid file path' });
     }

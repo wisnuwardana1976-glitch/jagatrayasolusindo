@@ -145,7 +145,7 @@ function App() {
             case 'report/ar-aging':
                 return <ARAgingReport />;
             case 'report/crystal-reports':
-                return <CrystalReports />;
+                return <CrystalReports setCurrentPage={setCurrentPage} />;
             case 'gl-settings':
                 return <GlSettings />;
             case 'system-generated-journal':
