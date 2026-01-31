@@ -83,6 +83,17 @@ const menuItems = [
             { id: 'system-generated-journal', label: 'Auto Journal', icon: 'file-text' },
         ],
     },
+    {
+        section: 'Adjustment',
+        items: [
+            { id: 'inventory-adjustment-in', label: 'Inventory Adj. In', icon: 'download' },
+            { id: 'inventory-adjustment-out', label: 'Inventory Adj. Out', icon: 'send' },
+            { id: 'ap-debit-adjustment', label: 'AP Debit Adj.', icon: 'file-minus' },
+            { id: 'ap-credit-adjustment', label: 'AP Credit Adj.', icon: 'file-plus' },
+            { id: 'ar-debit-adjustment', label: 'AR Debit Adj.', icon: 'file-plus' },
+            { id: 'ar-credit-adjustment', label: 'AR Credit Adj.', icon: 'file-minus' },
+        ],
+    },
 ];
 
 const icons = {

@@ -6,6 +6,7 @@ function BankList({ transactionType }) {
     const [showForm, setShowForm] = useState(false);
     const [accounts, setAccounts] = useState([]);
     const [bankAccounts, setBankAccounts] = useState([]);
+    const [partners, setPartners] = useState([]);
 
     // Available transcodes
     const [availableTranscodes, setAvailableTranscodes] = useState([]);
@@ -34,9 +35,8 @@ function BankList({ transactionType }) {
         loadData();
     }, [transactionType]);
 
-    useEffect(() => {
-        fetchOutstandingInvoices();
-    }, [formData.type]);
+    // Removed standalone useEffect for fetchOutstandingInvoices to avoid race conditions
+    // It is now called in loadData
 
     useEffect(() => {
         if (formData.transcode_id) {
@@ -49,8 +49,15 @@ function BankList({ transactionType }) {
 
     const loadData = async () => {
         setLoading(true);
-        await fetchMasterData();
-        await fetchJournals();
+        try {
+            await Promise.all([
+                fetchMasterData(),
+                fetchJournals(),
+                fetchOutstandingInvoices()
+            ]);
+        } catch (error) {
+            console.error('Error loading data:', error);
+        }
         setLoading(false);
     };
 
@@ -66,6 +73,13 @@ function BankList({ transactionType }) {
                     a.code.includes('1002')
                 );
                 setBankAccounts(bank);
+            }
+
+            // Partners
+            const partnerRes = await fetch('/api/partners');
+            const partnerData = await partnerRes.json();
+            if (partnerData.success) {
+                setPartners(partnerData.data);
             }
 
             // Transcodes
@@ -131,16 +145,23 @@ function BankList({ transactionType }) {
             const apData = await apRes.json();
             const arData = await arRes.json();
 
-            if (apData.success) setOutstandingAp(apData.data);
-            if (arData.success) setOutstandingAr(arData.data);
+            const apList = apData.success ? apData.data : [];
+            const arList = arData.success ? arData.data : [];
+
+            setOutstandingAp(apList);
+            setOutstandingAr(arList);
+
+            return { ap: apList, ar: arList };
         } catch (error) {
             console.error('Error fetching invoices:', error);
+            return { ap: [], ar: [] };
         }
     };
 
     const handleCreate = () => {
         resetForm();
         setShowForm(true);
+        fetchOutstandingInvoices();
     };
 
     const resetForm = () => {
@@ -323,6 +344,9 @@ function BankList({ transactionType }) {
             const response = await fetch(`/api/journals/${journal.id}`);
             const result = await response.json();
 
+            // Fetch fresh invoices for lookup
+            const { ap, ar } = await fetchOutstandingInvoices();
+
             if (result.success) {
                 const data = result.data;
 
@@ -344,13 +368,21 @@ function BankList({ transactionType }) {
 
                     const amt = parseFloat(d.debit) || parseFloat(d.credit);
                     if (amt > 0) {
+                        let partnerId = d.partner_id || '';
+                        if (!partnerId && d.ref_id) {
+                            const inv = ap.find(i => i.id == d.ref_id) || ar.find(i => i.id == d.ref_id);
+                            if (inv) partnerId = inv.partner_id;
+                        }
+
                         details.push({
                             coa_id: d.coa_id,
                             description: d.description,
                             amount: amt,
                             ref_id: d.ref_id || '',
                             ref_type: d.ref_type || '',
-                            partner_id: ''
+                            partner_id: partnerId,
+                            ref_doc_number: d.ref_doc_number,
+                            partner_name: d.partner_name
                         });
                     }
                 });
@@ -577,19 +609,58 @@ function BankList({ transactionType }) {
                                                             >
                                                                 <option value="">-- Pilih Partner --</option>
                                                                 {(() => {
-                                                                    const partnerMap = new Map();
+                                                                    const partnerBalanceMap = new Map();
+                                                                    const outstandingIds = new Set();
+                                                                    const mergedPartners = [...partners];
+
                                                                     targetList.forEach(inv => {
-                                                                        if (!partnerMap.has(inv.partner_id)) {
-                                                                            partnerMap.set(inv.partner_id, { name: inv.partner_name, balance: 0 });
+                                                                        const bal = parseFloat(inv.balance) || 0;
+                                                                        outstandingIds.add(inv.partner_id);
+                                                                        if (partnerBalanceMap.has(inv.partner_id)) {
+                                                                            partnerBalanceMap.set(inv.partner_id, partnerBalanceMap.get(inv.partner_id) + bal);
+                                                                        } else {
+                                                                            partnerBalanceMap.set(inv.partner_id, bal);
                                                                         }
-                                                                        partnerMap.get(inv.partner_id).balance += (parseFloat(inv.balance) || 0);
+
+                                                                        // Inject missing partner from outstanding list
+                                                                        if (!mergedPartners.find(p => p.id === inv.partner_id)) {
+                                                                            mergedPartners.push({
+                                                                                id: inv.partner_id,
+                                                                                name: inv.partner_name || `Partner #${inv.partner_id}`
+                                                                            });
+                                                                        }
                                                                     });
 
-                                                                    return [...partnerMap.entries()].map(([id, data]) => (
-                                                                        <option key={id} value={id}>
-                                                                            {data.name} (Total: {new Intl.NumberFormat('id-ID').format(data.balance)})
-                                                                        </option>
-                                                                    ));
+                                                                    // Filter: Only outstanding OR currently selected
+                                                                    const selectedId = parseInt(row.partner_id);
+
+                                                                    // Inject selected if still missing
+                                                                    if (selectedId && !mergedPartners.find(p => p.id === selectedId)) {
+                                                                        mergedPartners.push({
+                                                                            id: selectedId,
+                                                                            name: row.partner_name || `Partner #${selectedId} (Deleted)`
+                                                                        });
+                                                                    }
+
+                                                                    const filteredPartners = mergedPartners.filter(p =>
+                                                                        outstandingIds.has(p.id) || (selectedId && p.id === selectedId)
+                                                                    );
+
+                                                                    return filteredPartners.map(p => {
+                                                                        const bal = partnerBalanceMap.get(p.id) || 0;
+                                                                        let label = p.name;
+                                                                        if (bal > 0) {
+                                                                            label += ` (Total: ${new Intl.NumberFormat('id-ID').format(bal)})`;
+                                                                        } else if (p.id === selectedId) {
+                                                                            label += ` (History)`;
+                                                                        }
+
+                                                                        return (
+                                                                            <option key={p.id} value={p.id}>
+                                                                                {label}
+                                                                            </option>
+                                                                        );
+                                                                    });
                                                                 })()}
                                                             </select>
                                                         </td>
@@ -601,13 +672,24 @@ function BankList({ transactionType }) {
                                                                 disabled={!isAllocatable || !row.partner_id}
                                                             >
                                                                 <option value="">-- Tanpa Alokasi --</option>
-                                                                {targetList
-                                                                    .filter(inv => !row.partner_id || inv.partner_id === parseInt(row.partner_id))
-                                                                    .map(inv => (
+                                                                {(() => {
+                                                                    const pId = parseInt(row.partner_id);
+                                                                    const filtered = targetList.filter(inv => !pId || inv.partner_id === pId);
+                                                                    const options = filtered.map(inv => (
                                                                         <option key={inv.id} value={inv.id}>
                                                                             {inv.doc_number} - {new Date(inv.doc_date).toLocaleDateString()} ({new Intl.NumberFormat('id-ID').format(inv.balance)})
                                                                         </option>
-                                                                    ))}
+                                                                    ));
+
+                                                                    if (row.ref_id && !filtered.find(inv => inv.id == row.ref_id)) {
+                                                                        options.unshift(
+                                                                            <option key="selected_ref" value={row.ref_id}>
+                                                                                {row.ref_doc_number || `Ref #${row.ref_id}`} (Selected)
+                                                                            </option>
+                                                                        );
+                                                                    }
+                                                                    return options;
+                                                                })()}
                                                             </select>
                                                         </td>
                                                         <td>

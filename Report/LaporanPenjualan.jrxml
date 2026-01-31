@@ -1,0 +1,89 @@
+<!-- Created with Jaspersoft Studio version 7.0.3.final using JasperReports Library version 7.0.3-41034ca841d452f3305ba55b9042260aaa1ab5dd  -->
+<jasperReport name="Blank_A4" language="java" pageWidth="595" pageHeight="842" columnWidth="555" leftMargin="20" rightMargin="20" topMargin="20" bottomMargin="20" uuid="16294ec6-2959-47bb-8303-41f28eb8ffaa">
+	<property name="com.jaspersoft.studio.data.sql.tables" value="ZGJhLiJJdGVtcyIgQVMgLDMyOSwxNzcsNWMyMjMzOWMtYWFmOS00MmY1LWE2OTgtMGU3NzljZWRm&#xa;NjU2O2RiYS4iQVJJbnZvaWNlRGV0YWlscyIgQVMgLDQwNiw2NSw3ODI2ZDgwNS1iMThhLTQwNWIt&#xa;YWM2OS1kZGI1NjdlZjY0MjA7ZGJhLiJBUkludm9pY2VzIiBBUyAsMTY5LDc3LDk2ZWY5YWRmLTJk&#xa;MzUtNDJjZi04N2Y4LTJmN2MzMWQ4MTBmZTs="/>
+	<property name="com.jaspersoft.studio.data.defaultdataadapter" value="Jagat"/>
+	<parameter name="Todate" class="java.util.Date"/>
+	<parameter name="Fromdate" class="java.util.Date"/>
+	<query language="SQL"><![CDATA[SELECT *
+FROM dba."ARInvoiceDetails"
+	JOIN dba."ARInvoices" ON 
+	 dba."ARInvoiceDetails".ar_invoice_id = dba."ARInvoices".id 
+	JOIN dba."Items" ON 
+	 dba."ARInvoiceDetails".item_id = dba."Items".id]]></query>
+	<field name="doc_date" class="java.sql.Date">
+		<property name="com.jaspersoft.studio.field.name" value="doc_date"/>
+		<property name="com.jaspersoft.studio.field.label" value="doc_date"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoices"/>
+	</field>
+	<field name="due_date" class="java.sql.Date">
+		<property name="com.jaspersoft.studio.field.name" value="due_date"/>
+		<property name="com.jaspersoft.studio.field.label" value="due_date"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoices"/>
+	</field>
+	<field name="unit_price" class="java.math.BigDecimal">
+		<property name="com.jaspersoft.studio.field.name" value="unit_price"/>
+		<property name="com.jaspersoft.studio.field.label" value="unit_price"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoiceDetails"/>
+	</field>
+	<field name="unit" class="java.lang.String">
+		<property name="com.jaspersoft.studio.field.name" value="unit"/>
+		<property name="com.jaspersoft.studio.field.label" value="unit"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="Items"/>
+	</field>
+	<field name="item_id" class="java.lang.Integer">
+		<property name="com.jaspersoft.studio.field.name" value="item_id"/>
+		<property name="com.jaspersoft.studio.field.label" value="item_id"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoiceDetails"/>
+	</field>
+	<field name="sales_person_id" class="java.lang.Integer">
+		<property name="com.jaspersoft.studio.field.name" value="sales_person_id"/>
+		<property name="com.jaspersoft.studio.field.label" value="sales_person_id"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoices"/>
+	</field>
+	<field name="partner_id" class="java.lang.Integer">
+		<property name="com.jaspersoft.studio.field.name" value="partner_id"/>
+		<property name="com.jaspersoft.studio.field.label" value="partner_id"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoices"/>
+	</field>
+	<field name="doc_number" class="java.lang.String">
+		<property name="com.jaspersoft.studio.field.name" value="doc_number"/>
+		<property name="com.jaspersoft.studio.field.label" value="doc_number"/>
+		<property name="com.jaspersoft.studio.field.tree.path" value="ARInvoices"/>
+	</field>
+	<background splitType="Stretch"/>
+	<title height="79" splitType="Stretch"/>
+	<pageHeader height="35" splitType="Stretch"/>
+	<columnHeader height="53" splitType="Stretch">
+		<element kind="staticText" uuid="c954d627-851d-4d33-9fbe-24060ee82d74" x="0" y="10" width="100" height="30">
+			<text><![CDATA[doc_date]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="0d7503b2-4c6f-4db9-9ec4-22fc4315b8c3"/>
+		</element>
+		<element kind="staticText" uuid="c4f80394-5b40-482b-a320-2f0164121e34" x="200" y="10" width="100" height="30">
+			<text><![CDATA[item_id]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="37240b41-5b7c-4d4a-9e7d-040b2e06ad6e"/>
+		</element>
+		<element kind="staticText" uuid="bd3d38af-0e2b-40dc-9010-c541c5b0796f" x="370" y="10" width="100" height="30">
+			<text><![CDATA[unit_price]]></text>
+			<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="d4490681-b92b-4fd1-922c-61d2c3f9f48e"/>
+		</element>
+	</columnHeader>
+	<detail>
+		<band height="46" splitType="Stretch">
+			<element kind="textField" uuid="83fef977-e904-4b25-9e17-09b3406ff5c6" x="20" y="10" width="100" height="30">
+				<expression><![CDATA[$F{doc_date}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="0d7503b2-4c6f-4db9-9ec4-22fc4315b8c3"/>
+			</element>
+			<element kind="textField" uuid="1b9874b3-4bfc-40ae-bd76-b6da6af790cc" x="200" y="10" width="100" height="30">
+				<expression><![CDATA[$F{item_id}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="37240b41-5b7c-4d4a-9e7d-040b2e06ad6e"/>
+			</element>
+			<element kind="textField" uuid="4faab8f6-f07a-4b68-9ea4-66bd798dbc8e" x="370" y="10" width="100" height="30">
+				<expression><![CDATA[$F{unit_price}]]></expression>
+				<property name="com.jaspersoft.studio.spreadsheet.connectionID" value="d4490681-b92b-4fd1-922c-61d2c3f9f48e"/>
+			</element>
+		</band>
+	</detail>
+	<columnFooter height="45" splitType="Stretch"/>
+	<pageFooter height="54" splitType="Stretch"/>
+	<summary height="42" splitType="Stretch"/>
+</jasperReport>

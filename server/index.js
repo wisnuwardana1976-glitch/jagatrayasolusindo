@@ -7,15 +7,19 @@ import path from 'path';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import PDFDocument from 'pdfkit';
+import * as XLSX from 'xlsx';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+
+
 const logDebug = (msg) => {
   const timestamp = new Date().toISOString();
   fs.appendFileSync('journal_debug.log', `[${timestamp}] ${msg}\n`);
 };
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -980,14 +984,32 @@ app.get('/api/journals/:id', async (req, res) => {
     if (result.length === 0) return res.status(404).json({ success: false, message: 'Journal not found' });
 
     const details = await executeQuery(`
-      SELECT d.*, a.code as coa_code, a.name as coa_name
+      SELECT d.*, a.code as coa_code, a.name as coa_name,
+             ap.partner_id as ap_partner_id,
+             ar.partner_id as ar_partner_id,
+             ap.doc_number as ap_doc_number,
+             ar.doc_number as ar_doc_number,
+             pap.name as ap_partner_name,
+             par.name as ar_partner_name
       FROM JournalVoucherDetails d
       LEFT JOIN Accounts a ON d.coa_id = a.id
+      LEFT JOIN APInvoices ap ON d.ref_id = ap.id AND d.ref_type = 'AP'
+      LEFT JOIN ARInvoices ar ON d.ref_id = ar.id AND d.ref_type = 'AR'
+      LEFT JOIN Partners pap ON ap.partner_id = pap.id
+      LEFT JOIN Partners par ON ar.partner_id = par.id
       WHERE d.jv_id = ?
     `, [req.params.id]);
 
+    // Normalize partner_id, doc_number, partner_name
+    const enhancedDetails = details.map(d => ({
+      ...d,
+      partner_id: d.ap_partner_id || d.ar_partner_id || null,
+      ref_doc_number: d.ref_type === 'AP' ? d.ap_doc_number : (d.ref_type === 'AR' ? d.ar_doc_number : null),
+      partner_name: d.ref_type === 'AP' ? d.ap_partner_name : (d.ref_type === 'AR' ? d.ar_partner_name : null)
+    }));
+
     const journal = result[0];
-    journal.details = details;
+    journal.details = enhancedDetails;
 
     res.json({ success: true, data: journal });
   } catch (error) {
@@ -2120,6 +2142,42 @@ app.get('/api/ap-invoices', async (req, res) => {
 
     const result = await executeQuery(query, params);
     res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get invoices for AP allocation (only outstanding invoices)
+app.get('/api/ap-invoices/for-allocation', async (req, res) => {
+  try {
+    const { partner_id } = req.query;
+    if (!partner_id) {
+      return res.status(400).json({ success: false, error: 'partner_id required' });
+    }
+
+    // Get all posted invoices for this partner with outstanding balance
+    const partnerIdInt = parseInt(partner_id);
+    const query = `
+      SELECT id, doc_number, doc_date,
+        COALESCE(total_amount, 0) as total_amount,
+        COALESCE(paid_amount, 0) as paid_amount
+      FROM APInvoices
+      WHERE partner_id = ${partnerIdInt} AND status = 'Posted'
+      ORDER BY doc_date ASC
+    `;
+    const invoices = await executeQuery(query);
+
+    // Calculate outstanding and filter
+    const outstandingInvoices = invoices
+      .map(inv => ({
+        ...inv,
+        total_amount: parseFloat(inv.total_amount || 0),
+        paid_amount: parseFloat(inv.paid_amount || 0),
+        outstanding_amount: parseFloat(inv.total_amount || 0) - parseFloat(inv.paid_amount || 0)
+      }))
+      .filter(inv => inv.outstanding_amount > 0.01);
+
+    res.json({ success: true, data: outstandingInvoices });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -3285,14 +3343,11 @@ app.get('/api/reports/ap-outstanding', async (req, res) => {
         ap.due_date,
         ap.status,
         p.name as partner_name,
-        (
-          SELECT SUM(d.quantity * d.unit_price)
-          FROM APInvoiceDetails d
-          WHERE d.ap_invoice_id = ap.id
-        ) as total_amount
+        (ap.total_amount - COALESCE(ap.paid_amount, 0)) as total_amount
       FROM APInvoices ap
       LEFT JOIN Partners p ON ap.partner_id = p.id
-      WHERE ap.status = 'Posted'
+      WHERE ap.status IN ('Posted', 'Partial')
+      AND (ap.total_amount - COALESCE(ap.paid_amount, 0)) > 1
       ORDER BY ap.due_date ASC, ap.doc_date ASC
     `);
 
@@ -3326,14 +3381,11 @@ app.get('/api/reports/ar-outstanding', async (req, res) => {
         ar.due_date,
         ar.status,
         p.name as partner_name,
-        (
-          SELECT SUM(d.quantity * d.unit_price)
-          FROM ARInvoiceDetails d
-          WHERE d.ar_invoice_id = ar.id
-        ) as total_amount
+        (ar.total_amount - COALESCE(ar.paid_amount, 0)) as total_amount
       FROM ARInvoices ar
       LEFT JOIN Partners p ON ar.partner_id = p.id
-      WHERE ar.status = 'Posted'
+      WHERE ar.status IN ('Posted', 'Partial')
+      AND (ar.total_amount - COALESCE(ar.paid_amount, 0)) > 1
       ORDER BY ar.due_date ASC, ar.doc_date ASC
     `);
 
@@ -3367,14 +3419,11 @@ app.get('/api/reports/ap-aging', async (req, res) => {
         ap.due_date,
         p.name as partner_name,
         p.id as partner_id,
-        (
-          SELECT SUM(d.quantity * d.unit_price)
-          FROM APInvoiceDetails d
-          WHERE d.ap_invoice_id = ap.id
-        ) as total_amount
+        (ap.total_amount - COALESCE(ap.paid_amount, 0)) as total_amount
       FROM APInvoices ap
       LEFT JOIN Partners p ON ap.partner_id = p.id
-      WHERE ap.status = 'Posted'
+      WHERE ap.status IN ('Posted', 'Partial')
+      AND (ap.total_amount - COALESCE(ap.paid_amount, 0)) > 1
       ORDER BY p.name ASC, ap.due_date ASC
     `);
 
@@ -3436,14 +3485,11 @@ app.get('/api/reports/ar-aging', async (req, res) => {
         ar.due_date,
         p.name as partner_name,
         p.id as partner_id,
-        (
-          SELECT SUM(d.quantity * d.unit_price)
-          FROM ARInvoiceDetails d
-          WHERE d.ar_invoice_id = ar.id
-        ) as total_amount
+        (ar.total_amount - COALESCE(ar.paid_amount, 0)) as total_amount
       FROM ARInvoices ar
       LEFT JOIN Partners p ON ar.partner_id = p.id
-      WHERE ar.status = 'Posted'
+      WHERE ar.status IN ('Posted', 'Partial')
+      AND (ar.total_amount - COALESCE(ar.paid_amount, 0)) > 1
       ORDER BY p.name ASC, ar.due_date ASC
     `);
 
@@ -4061,6 +4107,145 @@ app.get('/api/reports/pdf', async (req, res) => {
   }
 });
 
+// ==================== JASPER REPORTS EXCEL EXPORT ====================
+app.get('/api/reports/excel', async (req, res) => {
+  try {
+    const { filename, startDate, endDate } = req.query;
+
+    if (!filename) {
+      return res.status(400).json({ success: false, error: 'Filename is required' });
+    }
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'Start date and end date are required' });
+    }
+
+    console.log(`Generating Excel report: ${filename} with params: ${startDate} to ${endDate}`);
+
+    // Query data based on the report filename
+    let reportData = [];
+    let reportTitle = 'Laporan';
+    let columns = [];
+    let columnKeys = [];
+
+    // Determine query based on report file
+    if (filename.toLowerCase().includes('pembelian') || filename.toLowerCase().includes('ap')) {
+      reportTitle = 'LAPORAN PEMBELIAN';
+      columns = ['No Dokumen', 'Tanggal', 'Supplier', 'Item', 'Qty', 'Harga', 'Jumlah'];
+      columnKeys = ['doc_number', 'doc_date', 'partner_name', 'item_name', 'quantity', 'unit_price', 'amount'];
+
+      const query = `
+        SELECT 
+          a.doc_number,
+          a.doc_date,
+          p.name as partner_name,
+          i.name as item_name,
+          b.quantity,
+          b.unit_price,
+          (b.quantity * b.unit_price) as amount
+        FROM APInvoices a
+        JOIN APInvoiceDetails b ON b.ap_invoice_id = a.id
+        LEFT JOIN Partners p ON a.partner_id = p.id
+        LEFT JOIN Items i ON b.item_id = i.id
+        WHERE a.doc_date BETWEEN ? AND ?
+        ORDER BY a.doc_date, a.doc_number
+      `;
+
+      reportData = await executeQuery(query, [startDate, endDate]);
+    } else if (filename.toLowerCase().includes('penjualan') || filename.toLowerCase().includes('ar')) {
+      reportTitle = 'LAPORAN PENJUALAN';
+      columns = ['No Dokumen', 'Tanggal', 'Customer', 'Item', 'Qty', 'Harga', 'Jumlah'];
+      columnKeys = ['doc_number', 'doc_date', 'partner_name', 'item_name', 'quantity', 'unit_price', 'amount'];
+
+      const query = `
+        SELECT 
+          a.doc_number,
+          a.doc_date,
+          p.name as partner_name,
+          i.name as item_name,
+          b.quantity,
+          b.unit_price,
+          (b.quantity * b.unit_price) as amount
+        FROM ARInvoices a
+        JOIN ARInvoiceDetails b ON b.ar_invoice_id = a.id
+        LEFT JOIN Partners p ON a.partner_id = p.id
+        LEFT JOIN Items i ON b.item_id = i.id
+        WHERE a.doc_date BETWEEN ? AND ?
+        ORDER BY a.doc_date, a.doc_number
+      `;
+
+      reportData = await executeQuery(query, [startDate, endDate]);
+    } else {
+      // Generic for other reports
+      reportTitle = 'LAPORAN';
+      columns = ['Data'];
+      columnKeys = ['data'];
+      reportData = [];
+    }
+
+    // Format data for Excel
+    const excelData = reportData.map(row => {
+      const formattedRow = {};
+      columnKeys.forEach((key, index) => {
+        let value = row[key];
+        if (key === 'doc_date' && value) {
+          value = new Date(value).toLocaleDateString('id-ID');
+        } else if (['quantity', 'unit_price', 'amount'].includes(key)) {
+          value = Number(value) || 0;
+        }
+        formattedRow[columns[index]] = value;
+      });
+      return formattedRow;
+    });
+
+    // Calculate total
+    const totalAmount = reportData.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+
+    // Add empty row and total row
+    excelData.push({});
+    excelData.push({
+      [columns[0]]: 'TOTAL',
+      [columns[columns.length - 1]]: totalAmount
+    });
+
+    // Create workbook and worksheet
+    const wb = XLSX.utils.book_new();
+
+    // Add title rows
+    const titleData = [
+      [reportTitle],
+      [`Periode: ${startDate} s/d ${endDate}`],
+      [],  // Empty row
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(titleData);
+
+    // Add data starting from row 4
+    XLSX.utils.sheet_add_json(ws, excelData, { origin: 'A4' });
+
+    // Set column widths
+    const colWidths = columns.map((col, i) => ({ wch: i === 3 ? 40 : i === 2 ? 25 : 15 }));
+    ws['!cols'] = colWidths;
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Data');
+
+    // Generate buffer
+    const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    // Set response headers
+    const excelFilename = filename.replace('.jrxml', '.xlsx').replace('.pdf', '.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${excelFilename}"`);
+    res.setHeader('Content-Length', excelBuffer.length);
+
+    res.send(excelBuffer);
+
+  } catch (error) {
+    console.error('Error generating Excel report:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== REPORT DEFINITIONS (STANDARD LIST) ====================
 app.get('/api/reports/definitions', async (req, res) => {
   try {
@@ -4101,6 +4286,853 @@ app.delete('/api/reports/definitions/:id', async (req, res) => {
   try {
     await executeQuery('DELETE FROM ReportDefinitions WHERE id = ?', [req.params.id]);
     res.json({ success: true, message: 'Report definition deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== INVENTORY ADJUSTMENTS ====================
+
+// Get all inventory adjustments
+app.get('/api/inventory-adjustments', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let query = `
+      SELECT ia.*, w.description as warehouse_name, a.name as counter_account_name, t.code as transcode_code
+      FROM InventoryAdjustments ia
+      LEFT JOIN Warehouses w ON ia.warehouse_id = w.id
+      LEFT JOIN Accounts a ON ia.counter_account_id = a.id
+      LEFT JOIN Transcodes t ON ia.transcode_id = t.id
+    `;
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE ia.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+    query += ' ORDER BY ia.doc_date DESC, ia.doc_number DESC';
+    console.log('Fetching inventory adjustments, query:', query, 'params:', params);
+    const result = await executeQuery(query, params);
+    console.log('Found', result.length, 'adjustments:', result.map(r => ({ id: r.id, type: r.adjustment_type, doc: r.doc_number })));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching inventory adjustments:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get single inventory adjustment with details
+app.get('/api/inventory-adjustments/:id', async (req, res) => {
+  try {
+    const [adjustment] = await executeQuery(`
+      SELECT ia.*, w.description as warehouse_name, a.name as counter_account_name
+      FROM InventoryAdjustments ia
+      LEFT JOIN Warehouses w ON ia.warehouse_id = w.id
+      LEFT JOIN Accounts a ON ia.counter_account_id = a.id
+      WHERE ia.id = ?
+    `, [req.params.id]);
+
+    if (!adjustment) {
+      return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    }
+
+    const details = await executeQuery(`
+      SELECT iad.*, i.code as item_code, i.name as item_name
+      FROM InventoryAdjustmentDetails iad
+      LEFT JOIN Items i ON iad.item_id = i.id
+      WHERE iad.adjustment_id = ?
+    `, [req.params.id]);
+
+    adjustment.details = details;
+    res.json({ success: true, data: adjustment });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create inventory adjustment
+app.post('/api/inventory-adjustments', async (req, res) => {
+  let connection;
+  try {
+    const { doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes, items } = req.body;
+
+    console.log('Creating inventory adjustment:', { doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes });
+
+    connection = await odbc.connect(connectionString);
+
+    await connection.query(`
+      INSERT INTO InventoryAdjustments (doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft')
+    `, [doc_number, doc_date, adjustment_type, transcode_id || null, warehouse_id, counter_account_id, notes || '']);
+
+    const adjustmentIdResult = await connection.query('SELECT @@IDENTITY as id');
+    const adjustmentId = Number(adjustmentIdResult[0].id);
+    console.log('Created adjustment ID:', adjustmentId);
+
+    // Insert details
+    for (const item of items || []) {
+      console.log('Inserting item:', item);
+      await connection.query(`
+        INSERT INTO InventoryAdjustmentDetails (adjustment_id, item_id, quantity, unit_cost, amount, notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [adjustmentId, item.item_id, item.quantity, item.unit_cost, item.amount, item.notes || '']);
+    }
+
+    res.json({ success: true, message: 'Adjustment berhasil disimpan', id: adjustmentId });
+  } catch (error) {
+    console.error('Error creating inventory adjustment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Update inventory adjustment
+app.put('/api/inventory-adjustments/:id', async (req, res) => {
+  let connection;
+  try {
+    const { doc_date, warehouse_id, counter_account_id, notes, items } = req.body;
+
+    connection = await odbc.connect(connectionString);
+
+    await connection.query(`
+      UPDATE InventoryAdjustments SET doc_date = ?, warehouse_id = ?, counter_account_id = ?, notes = ?, updated_at = CURRENT TIMESTAMP
+      WHERE id = ? AND status = 'Draft'
+    `, [doc_date, warehouse_id, counter_account_id, notes || '', req.params.id]);
+
+    // Delete and re-insert details
+    await connection.query('DELETE FROM InventoryAdjustmentDetails WHERE adjustment_id = ?', [req.params.id]);
+    for (const item of items || []) {
+      await connection.query(`
+        INSERT INTO InventoryAdjustmentDetails (adjustment_id, item_id, quantity, unit_cost, amount, notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [req.params.id, item.item_id, item.quantity, item.unit_cost, item.amount, item.notes || '']);
+    }
+
+    res.json({ success: true, message: 'Adjustment berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Delete inventory adjustment
+app.delete('/api/inventory-adjustments/:id', async (req, res) => {
+  try {
+    const [adj] = await executeQuery('SELECT status FROM InventoryAdjustments WHERE id = ?', [req.params.id]);
+    if (adj && adj.status !== 'Draft') {
+      return res.status(400).json({ success: false, error: 'Hanya adjustment Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM InventoryAdjustmentDetails WHERE adjustment_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM InventoryAdjustments WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Adjustment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Approve inventory adjustment
+app.put('/api/inventory-adjustments/:id/approve', async (req, res) => {
+  try {
+    await executeQuery(`UPDATE InventoryAdjustments SET status = 'Approved', updated_at = CURRENT TIMESTAMP WHERE id = ? AND status = 'Draft'`, [req.params.id]);
+    res.json({ success: true, message: 'Adjustment berhasil diapprove' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Post inventory adjustment (update stock + create journal)
+app.put('/api/inventory-adjustments/:id/post', async (req, res) => {
+  let connection;
+  try {
+    console.log('Posting inventory adjustment:', req.params.id);
+    connection = await odbc.connect(connectionString);
+
+    // Check adjustment status
+    const adjResult = await connection.query('SELECT * FROM InventoryAdjustments WHERE id = ?', [req.params.id]);
+    const adj = adjResult[0];
+
+    if (!adj) return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    if (adj.status === 'Posted') return res.status(400).json({ success: false, error: 'Sudah di-post' });
+
+    const details = await connection.query('SELECT * FROM InventoryAdjustmentDetails WHERE adjustment_id = ?', [req.params.id]);
+    console.log('Found', details.length, 'detail items');
+
+    // Get inventory account
+    let inventoryAccountId = adj.counter_account_id;
+    try {
+      const invAccount = await connection.query("SELECT id FROM Accounts WHERE type = 'ASSET' AND (name LIKE '%Persediaan%' OR name LIKE '%Inventory%')");
+      if (invAccount.length > 0) inventoryAccountId = invAccount[0].id;
+    } catch (e) {
+      console.log('Using counter account as inventory account');
+    }
+
+    let totalAmount = 0;
+
+    // Update stock for each item
+    for (const detail of details) {
+      try {
+        const qtyChange = adj.adjustment_type === 'IN' ? detail.quantity : -detail.quantity;
+
+        // Check if ItemStocks table exists
+        const existingStock = await connection.query(
+          'SELECT * FROM ItemStocks WHERE item_id = ? AND warehouse_id = ?',
+          [detail.item_id, adj.warehouse_id]
+        );
+
+        if (existingStock.length > 0) {
+          const stock = existingStock[0];
+          const newQty = parseFloat(stock.quantity || 0) + parseFloat(qtyChange);
+          let newAvgCost = stock.average_cost || detail.unit_cost;
+
+          if (adj.adjustment_type === 'IN' && parseFloat(detail.quantity) > 0) {
+            const oldValue = parseFloat(stock.quantity || 0) * parseFloat(stock.average_cost || 0);
+            const newValue = parseFloat(detail.quantity) * parseFloat(detail.unit_cost);
+            newAvgCost = newQty > 0 ? (oldValue + newValue) / newQty : detail.unit_cost;
+          }
+          await connection.query(
+            'UPDATE ItemStocks SET quantity = ?, average_cost = ? WHERE item_id = ? AND warehouse_id = ?',
+            [newQty, newAvgCost, detail.item_id, adj.warehouse_id]
+          );
+        } else {
+          await connection.query(
+            'INSERT INTO ItemStocks (item_id, warehouse_id, quantity, average_cost) VALUES (?, ?, ?, ?)',
+            [detail.item_id, adj.warehouse_id, qtyChange, detail.unit_cost]
+          );
+        }
+      } catch (stockError) {
+        console.log('ItemStocks update skipped:', stockError.message);
+      }
+      totalAmount += parseFloat(detail.amount || 0);
+    }
+
+    console.log('Total amount for journal:', totalAmount);
+
+    // Create Journal Voucher
+    const jvNumber = `JV-ADJ-${adj.doc_number}`;
+    await connection.query(`
+      INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
+      VALUES (?, ?, ?, 'Posted', 'INV_ADJUSTMENT', ?)
+    `, [jvNumber, adj.doc_date, `Inventory Adjustment ${adj.adjustment_type}: ${adj.doc_number}`, adj.id]);
+
+    const jvResult = await connection.query('SELECT @@IDENTITY as id');
+    const jvId = Number(jvResult[0].id);
+    console.log('Created JV ID:', jvId);
+
+    // Journal entries based on type
+    if (adj.adjustment_type === 'IN') {
+      // Dr. Inventory, Cr. Counter Account
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
+        [jvId, inventoryAccountId, 'Penambahan Stok', totalAmount]);
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
+        [jvId, adj.counter_account_id, 'Contra Adjustment In', totalAmount]);
+    } else {
+      // Dr. Counter Account (COGS), Cr. Inventory
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
+        [jvId, adj.counter_account_id, 'HPP / COGS Adjustment Out', totalAmount]);
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
+        [jvId, inventoryAccountId, 'Pengurangan Stok', totalAmount]);
+    }
+
+    // Update status
+    await connection.query(`UPDATE InventoryAdjustments SET status = 'Posted', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    console.log('Adjustment posted successfully');
+    res.json({ success: true, message: 'Adjustment berhasil di-post' });
+  } catch (error) {
+    console.error('Error posting inventory adjustment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Unapprove inventory adjustment
+app.put('/api/inventory-adjustments/:id/unapprove', async (req, res) => {
+  try {
+    await executeQuery(`UPDATE InventoryAdjustments SET status = 'Draft', updated_at = CURRENT TIMESTAMP WHERE id = ? AND status = 'Approved'`, [req.params.id]);
+    res.json({ success: true, message: 'Adjustment berhasil di-unapprove' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Unpost inventory adjustment (reverse stock + delete journal)
+app.put('/api/inventory-adjustments/:id/unpost', async (req, res) => {
+  let connection;
+  try {
+    console.log('Unposting inventory adjustment:', req.params.id);
+    connection = await odbc.connect(connectionString);
+
+    // Check adjustment status
+    const adjResult = await connection.query('SELECT * FROM InventoryAdjustments WHERE id = ?', [req.params.id]);
+    const adj = adjResult[0];
+
+    if (!adj) return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    if (adj.status !== 'Posted') return res.status(400).json({ success: false, error: 'Adjustment belum di-post' });
+
+    const details = await connection.query('SELECT * FROM InventoryAdjustmentDetails WHERE adjustment_id = ?', [req.params.id]);
+
+    // Reverse stock for each item
+    for (const detail of details) {
+      try {
+        // Reverse logic: If IN, we subtract. If OUT, we add.
+        const qtyChange = adj.adjustment_type === 'IN' ? -detail.quantity : detail.quantity;
+
+        const existingStock = await connection.query(
+          'SELECT * FROM ItemStocks WHERE item_id = ? AND warehouse_id = ?',
+          [detail.item_id, adj.warehouse_id]
+        );
+
+        if (existingStock.length > 0) {
+          const stock = existingStock[0];
+          const newQty = parseFloat(stock.quantity || 0) + parseFloat(qtyChange);
+
+          // Note: Average cost is usually NOT recalculated on unpost/void to avoid complexity, 
+          // or properly recalculated if strictly LIFO/FIFO throughout, but here we just update qty for simplicity
+          // or maintain same avg cost.
+
+          await connection.query(
+            'UPDATE ItemStocks SET quantity = ? WHERE item_id = ? AND warehouse_id = ?',
+            [newQty, detail.item_id, adj.warehouse_id]
+          );
+        }
+      } catch (stockError) {
+        console.log('ItemStocks reversal skipped:', stockError.message);
+      }
+    }
+
+    // Delete Journal Voucher
+    // First, find the JV ID
+    const jvNum = `JV-ADJ-${adj.doc_number}`;
+    const jv = await connection.query("SELECT id FROM JournalVouchers WHERE doc_number = ?", [jvNum]);
+    if (jv.length > 0) {
+      const jvId = jv[0].id;
+      await connection.query('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+      await connection.query('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+    }
+
+    // Update status
+    await connection.query(`UPDATE InventoryAdjustments SET status = 'Approved', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    console.log('Adjustment unposted successfully');
+    res.json({ success: true, message: 'Adjustment berhasil di-unpost' });
+  } catch (error) {
+    console.error('Error unposting inventory adjustment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Get average cost for item
+app.get('/api/items/:id/average-cost', async (req, res) => {
+  try {
+    const { warehouse_id } = req.query;
+    let query = 'SELECT AVG(average_cost) as avg_cost FROM ItemStocks WHERE item_id = ?';
+    const params = [req.params.id];
+    if (warehouse_id) {
+      query = 'SELECT average_cost as avg_cost FROM ItemStocks WHERE item_id = ? AND warehouse_id = ?';
+      params.push(warehouse_id);
+    }
+    const [result] = await executeQuery(query, params);
+    res.json({ success: true, average_cost: result?.avg_cost || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== AP ADJUSTMENTS ====================
+
+// Get all AP adjustments
+app.get('/api/ap-adjustments', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let query = `
+      SELECT apa.*, apa.type as adjustment_type, apa.total_amount as amount, apa.description as notes, p.name as partner_name, a.name as counter_account_name, t.code as transcode_code,
+      apa.allocate_to_invoice
+      FROM APAdjustments apa
+      LEFT JOIN Partners p ON apa.partner_id = p.id
+      LEFT JOIN Accounts a ON apa.counter_account_id = a.id
+      LEFT JOIN Transcodes t ON apa.transcode_id = t.id
+    `;
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE apa.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+    query += ' ORDER BY apa.doc_date DESC, apa.doc_number DESC';
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get single AP adjustment with allocations
+app.get('/api/ap-adjustments/:id', async (req, res) => {
+  try {
+    const [adjustment] = await executeQuery(`
+      SELECT apa.*, apa.type as adjustment_type, apa.total_amount as amount, apa.description as notes, p.name as partner_name, a.name as counter_account_name
+      FROM APAdjustments apa
+      LEFT JOIN Partners p ON apa.partner_id = p.id
+      LEFT JOIN Accounts a ON apa.counter_account_id = a.id
+      WHERE apa.id = ?
+    `, [req.params.id]);
+
+    if (!adjustment) {
+      return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    }
+
+    const allocations = await executeQuery(`
+      SELECT apaa.*, api.doc_number as invoice_number
+      FROM APAdjustmentAllocations apaa
+      LEFT JOIN APInvoices api ON apaa.ap_invoice_id = api.id
+      WHERE apaa.adjustment_id = ?
+    `, [req.params.id]);
+
+    adjustment.allocations = allocations;
+    res.json({ success: true, data: adjustment });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create AP adjustment
+app.post('/api/ap-adjustments', async (req, res) => {
+  let connection;
+  try {
+    const { doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+
+    connection = await odbc.connect(connectionString);
+
+    await connection.query(`
+      INSERT INTO APAdjustments (doc_number, doc_date, type, transcode_id, partner_id, counter_account_id, total_amount, description, status, allocate_to_invoice)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
+    `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N']);
+
+    const adjustmentIdResult = await connection.query('SELECT @@IDENTITY as id');
+    const adjustmentId = Number(adjustmentIdResult[0].id);
+
+    // Insert allocations if any
+    if (allocate_to_invoice === 'Y' && allocations) {
+      for (const alloc of allocations) {
+        await connection.query(`
+          INSERT INTO APAdjustmentAllocations (adjustment_id, ap_invoice_id, allocated_amount)
+          VALUES (?, ?, ?)
+        `, [adjustmentId, alloc.ap_invoice_id, alloc.allocated_amount]);
+      }
+    }
+
+    res.json({ success: true, message: 'AP Adjustment berhasil disimpan', id: adjustmentId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Update AP adjustment
+app.put('/api/ap-adjustments/:id', async (req, res) => {
+  try {
+    const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+
+    await executeQuery(`
+      UPDATE APAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, total_amount = ?, description = ?, allocate_to_invoice = ?, updated_at = CURRENT TIMESTAMP
+      WHERE id = ? AND status = 'Draft'
+    `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', req.params.id]);
+
+    // Update allocations
+    await executeQuery('DELETE FROM APAdjustmentAllocations WHERE adjustment_id = ?', [req.params.id]);
+    if (allocate_to_invoice === 'Y' && allocations) {
+      for (const alloc of allocations) {
+        await executeQuery(`
+          INSERT INTO APAdjustmentAllocations (adjustment_id, ap_invoice_id, allocated_amount)
+          VALUES (?, ?, ?)
+        `, [req.params.id, alloc.ap_invoice_id, alloc.allocated_amount]);
+      }
+    }
+
+    res.json({ success: true, message: 'AP Adjustment berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete AP adjustment
+app.delete('/api/ap-adjustments/:id', async (req, res) => {
+  try {
+    const [adj] = await executeQuery('SELECT status FROM APAdjustments WHERE id = ?', [req.params.id]);
+    if (adj && adj.status !== 'Draft') {
+      return res.status(400).json({ success: false, error: 'Hanya adjustment Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM APAdjustmentAllocations WHERE adjustment_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM APAdjustments WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'AP Adjustment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Approve AP adjustment
+app.put('/api/ap-adjustments/:id/approve', async (req, res) => {
+  try {
+    await executeQuery(`UPDATE APAdjustments SET status = 'Approved', updated_at = CURRENT TIMESTAMP WHERE id = ? AND status = 'Draft'`, [req.params.id]);
+    res.json({ success: true, message: 'AP Adjustment berhasil diapprove' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Unapprove AP adjustment
+app.put('/api/ap-adjustments/:id/unapprove', async (req, res) => {
+  try {
+    await executeQuery(`UPDATE APAdjustments SET status = 'Draft', updated_at = CURRENT TIMESTAMP WHERE id = ? AND status = 'Approved'`, [req.params.id]);
+    res.json({ success: true, message: 'AP Adjustment berhasil di-unapprove' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Post AP adjustment (create journal)
+app.put('/api/ap-adjustments/:id/post', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    const adjResult = await connection.query('SELECT * FROM APAdjustments WHERE id = ?', [req.params.id]);
+    const adj = adjResult[0];
+
+    if (!adj) return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    if (adj.status === 'Posted') return res.status(400).json({ success: false, error: 'Sudah di-post' });
+
+    // Get AP account
+    let apAccountId = adj.counter_account_id;
+    try {
+      const apAccount = await connection.query("SELECT id FROM Accounts WHERE type = 'LIABILITY' AND (name LIKE '%Hutang%' OR name LIKE '%Payable%')");
+      if (apAccount.length > 0) apAccountId = apAccount[0].id;
+    } catch (e) { }
+
+    // Create Journal Voucher
+    const jvNumber = `JV-APADJ-${adj.doc_number}`;
+    await connection.query(`
+      INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
+      VALUES (?, ?, ?, 'Posted', 'AP_ADJUSTMENT', ?)
+    `, [jvNumber, adj.doc_date, `AP Adjustment ${adj.adjustment_type}: ${adj.doc_number}`, adj.id]);
+
+    const jvResult = await connection.query('SELECT @@IDENTITY as id');
+    const jvId = Number(jvResult[0].id);
+
+    // Journal entries based on type
+    if (adj.adjustment_type === 'DEBIT') {
+      // Mengurangi hutang: Dr. AP (Hutang), Cr. Counter Account
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
+        [jvId, apAccountId, 'Pengurangan Hutang', adj.amount]);
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
+        [jvId, adj.counter_account_id, 'Contra AP Debit Adj', adj.amount]);
+    } else {
+      // Menambah hutang: Dr. Counter Account, Cr. AP (Hutang)
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
+        [jvId, adj.counter_account_id, 'Contra AP Credit Adj', adj.amount]);
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
+        [jvId, apAccountId, 'Penambahan Hutang', adj.amount]);
+    }
+
+    // Update status
+    await connection.query(`UPDATE APAdjustments SET status = 'Posted', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    res.json({ success: true, message: 'AP Adjustment berhasil di-post' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Unpost AP adjustment
+app.put('/api/ap-adjustments/:id/unpost', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    const adjResult = await connection.query('SELECT * FROM APAdjustments WHERE id = ?', [req.params.id]);
+    const adj = adjResult[0];
+
+    if (!adj) return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    if (adj.status !== 'Posted') return res.status(400).json({ success: false, error: 'Adjustment belum di-post' });
+
+    // Delete Journal Voucher
+    const jvNum = `JV-APADJ-${adj.doc_number}`;
+    const jv = await connection.query("SELECT id FROM JournalVouchers WHERE doc_number = ?", [jvNum]);
+    if (jv.length > 0) {
+      const jvId = jv[0].id;
+      await connection.query('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+      await connection.query('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+    }
+
+    // Update status
+    await connection.query(`UPDATE APAdjustments SET status = 'Approved', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    res.json({ success: true, message: 'AP Adjustment berhasil di-unpost' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Get invoices for AP allocation (only outstanding invoices)
+
+
+// ==================== AR ADJUSTMENTS ====================
+
+// Get all AR adjustments
+app.get('/api/ar-adjustments', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let query = `
+      SELECT ara.*, p.name as partner_name, a.name as counter_account_name, t.code as transcode_code
+      FROM ARAdjustments ara
+      LEFT JOIN Partners p ON ara.partner_id = p.id
+      LEFT JOIN Accounts a ON ara.counter_account_id = a.id
+      LEFT JOIN Transcodes t ON ara.transcode_id = t.id
+    `;
+    const params = [];
+    if (startDate && endDate) {
+      query += ' WHERE ara.doc_date BETWEEN ? AND ?';
+      params.push(startDate, endDate);
+    }
+    query += ' ORDER BY ara.doc_date DESC, ara.doc_number DESC';
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get single AR adjustment with allocations
+app.get('/api/ar-adjustments/:id', async (req, res) => {
+  try {
+    const [adjustment] = await executeQuery(`
+      SELECT ara.*, p.name as partner_name, a.name as counter_account_name
+      FROM ARAdjustments ara
+      LEFT JOIN Partners p ON ara.partner_id = p.id
+      LEFT JOIN Accounts a ON ara.counter_account_id = a.id
+      WHERE ara.id = ?
+    `, [req.params.id]);
+
+    if (!adjustment) {
+      return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    }
+
+    const allocations = await executeQuery(`
+      SELECT araa.*, ari.doc_number as invoice_number
+      FROM ARAdjustmentAllocations araa
+      LEFT JOIN ARInvoices ari ON araa.ar_invoice_id = ari.id
+      WHERE araa.adjustment_id = ?
+    `, [req.params.id]);
+
+    adjustment.allocations = allocations;
+    res.json({ success: true, data: adjustment });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create AR adjustment
+app.post('/api/ar-adjustments', async (req, res) => {
+  let connection;
+  try {
+    const { doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+
+    connection = await odbc.connect(connectionString);
+
+    await connection.query(`
+      INSERT INTO ARAdjustments (doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, status, allocate_to_invoice)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
+    `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N']);
+
+    const adjustmentIdResult = await connection.query('SELECT @@IDENTITY as id');
+    const adjustmentId = Number(adjustmentIdResult[0].id);
+
+    // Insert allocations if any
+    if (allocate_to_invoice === 'Y' && allocations) {
+      for (const alloc of allocations) {
+        await connection.query(`
+          INSERT INTO ARAdjustmentAllocations (adjustment_id, ar_invoice_id, allocated_amount)
+          VALUES (?, ?, ?)
+        `, [adjustmentId, alloc.ar_invoice_id, alloc.allocated_amount]);
+      }
+    }
+
+    res.json({ success: true, message: 'AR Adjustment berhasil disimpan', id: adjustmentId });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Update AR adjustment
+app.put('/api/ar-adjustments/:id', async (req, res) => {
+  try {
+    const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+
+    await executeQuery(`
+      UPDATE ARAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, amount = ?, notes = ?, allocate_to_invoice = ?, updated_at = CURRENT TIMESTAMP
+      WHERE id = ? AND status = 'Draft'
+    `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', req.params.id]);
+
+    // Update allocations
+    await executeQuery('DELETE FROM ARAdjustmentAllocations WHERE adjustment_id = ?', [req.params.id]);
+    if (allocate_to_invoice === 'Y' && allocations) {
+      for (const alloc of allocations) {
+        await executeQuery(`
+          INSERT INTO ARAdjustmentAllocations (adjustment_id, ar_invoice_id, allocated_amount)
+          VALUES (?, ?, ?)
+        `, [req.params.id, alloc.ar_invoice_id, alloc.allocated_amount]);
+      }
+    }
+
+    res.json({ success: true, message: 'AR Adjustment berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete AR adjustment
+app.delete('/api/ar-adjustments/:id', async (req, res) => {
+  try {
+    const [adj] = await executeQuery('SELECT status FROM ARAdjustments WHERE id = ?', [req.params.id]);
+    if (adj && adj.status !== 'Draft') {
+      return res.status(400).json({ success: false, error: 'Hanya adjustment Draft yang bisa dihapus' });
+    }
+    await executeQuery('DELETE FROM ARAdjustmentAllocations WHERE adjustment_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM ARAdjustments WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'AR Adjustment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Approve AR adjustment
+app.put('/api/ar-adjustments/:id/approve', async (req, res) => {
+  try {
+    await executeQuery(`UPDATE ARAdjustments SET status = 'Approved', updated_at = CURRENT TIMESTAMP WHERE id = ? AND status = 'Draft'`, [req.params.id]);
+    res.json({ success: true, message: 'AR Adjustment berhasil diapprove' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Unapprove AR adjustment
+app.put('/api/ar-adjustments/:id/unapprove', async (req, res) => {
+  try {
+    await executeQuery(`UPDATE ARAdjustments SET status = 'Draft', updated_at = CURRENT TIMESTAMP WHERE id = ? AND status = 'Approved'`, [req.params.id]);
+    res.json({ success: true, message: 'AR Adjustment berhasil di-unapprove' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Post AR adjustment (create journal)
+app.put('/api/ar-adjustments/:id/post', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    const adjResult = await connection.query('SELECT * FROM ARAdjustments WHERE id = ?', [req.params.id]);
+    const adj = adjResult[0];
+
+    if (!adj) return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    if (adj.status === 'Posted') return res.status(400).json({ success: false, error: 'Sudah di-post' });
+
+    // Get AR account
+    let arAccountId = adj.counter_account_id;
+    try {
+      const arAccount = await connection.query("SELECT id FROM Accounts WHERE type = 'ASSET' AND (name LIKE '%Piutang%' OR name LIKE '%Receivable%')");
+      if (arAccount.length > 0) arAccountId = arAccount[0].id;
+    } catch (e) { }
+
+    // Create Journal Voucher
+    const jvNumber = `JV-ARADJ-${adj.doc_number}`;
+    await connection.query(`
+      INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
+      VALUES (?, ?, ?, 'Posted', 'AR_ADJUSTMENT', ?)
+    `, [jvNumber, adj.doc_date, `AR Adjustment ${adj.adjustment_type}: ${adj.doc_number}`, adj.id]);
+
+    const jvResult = await connection.query('SELECT @@IDENTITY as id');
+    const jvId = Number(jvResult[0].id);
+
+    // Journal entries based on type
+    if (adj.adjustment_type === 'DEBIT') {
+      // Menambah piutang: Dr. AR (Piutang), Cr. Counter Account
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
+        [jvId, arAccountId, 'Penambahan Piutang', adj.amount]);
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
+        [jvId, adj.counter_account_id, 'Contra AR Debit Adj', adj.amount]);
+    } else {
+      // Mengurangi piutang: Dr. Counter Account, Cr. AR (Piutang)
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
+        [jvId, adj.counter_account_id, 'Contra AR Credit Adj', adj.amount]);
+      await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
+        [jvId, arAccountId, 'Pengurangan Piutang', adj.amount]);
+    }
+
+    // Update status
+    await connection.query(`UPDATE ARAdjustments SET status = 'Posted', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    res.json({ success: true, message: 'AR Adjustment berhasil di-post' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Unpost AR adjustment
+app.put('/api/ar-adjustments/:id/unpost', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    const adjResult = await connection.query('SELECT * FROM ARAdjustments WHERE id = ?', [req.params.id]);
+    const adj = adjResult[0];
+
+    if (!adj) return res.status(404).json({ success: false, error: 'Adjustment not found' });
+    if (adj.status !== 'Posted') return res.status(400).json({ success: false, error: 'Adjustment belum di-post' });
+
+    // Delete Journal Voucher
+    const jvNum = `JV-ARADJ-${adj.doc_number}`;
+    const jv = await connection.query("SELECT id FROM JournalVouchers WHERE doc_number = ?", [jvNum]);
+    if (jv.length > 0) {
+      const jvId = jv[0].id;
+      await connection.query('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+      await connection.query('DELETE FROM JournalVouchers WHERE id = ?', [jvId]);
+    }
+
+    // Update status
+    await connection.query(`UPDATE ARAdjustments SET status = 'Approved', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    res.json({ success: true, message: 'AR Adjustment berhasil di-unpost' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Get invoices for AR allocation
+app.get('/api/ar-invoices/for-allocation', async (req, res) => {
+  try {
+    const { partner_id } = req.query;
+    if (!partner_id) {
+      return res.status(400).json({ success: false, error: 'partner_id required' });
+    }
+    const result = await executeQuery(`
+      SELECT id, doc_number, doc_date, 
+        (SELECT SUM(quantity * unit_price) FROM ARInvoiceDetails WHERE ar_invoice_id = ARInvoices.id) as total_amount
+      FROM ARInvoices 
+      WHERE partner_id = ? AND status = 'Posted'
+      ORDER BY doc_date DESC
+    `, [partner_id]);
+    res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

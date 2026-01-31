@@ -44,6 +44,9 @@ import BankList from './pages/finance/BankList';
 import JournalVoucherList from './pages/finance/JournalVoucherList';
 import RecalculateInventory from './pages/inventory/RecalculateInventory';
 import JasperReports from './pages/report/JasperReports';
+import InventoryAdjustmentList from './pages/transaction/InventoryAdjustmentList';
+import APAdjustmentList from './pages/transaction/APAdjustmentList';
+import ARAdjustmentList from './pages/transaction/ARAdjustmentList';
 import './index.css';
 
 import { PeriodProvider } from './context/PeriodContext';
@@ -162,6 +165,18 @@ function App() {
                 return <BankList transactionType="OUT" />;
             case 'journal-voucher':
                 return <JournalVoucherList />;
+            case 'inventory-adjustment-in':
+                return <InventoryAdjustmentList adjustmentType="IN" />;
+            case 'inventory-adjustment-out':
+                return <InventoryAdjustmentList adjustmentType="OUT" />;
+            case 'ap-debit-adjustment':
+                return <APAdjustmentList adjustmentType="DEBIT" />;
+            case 'ap-credit-adjustment':
+                return <APAdjustmentList adjustmentType="CREDIT" />;
+            case 'ar-debit-adjustment':
+                return <ARAdjustmentList adjustmentType="DEBIT" />;
+            case 'ar-credit-adjustment':
+                return <ARAdjustmentList adjustmentType="CREDIT" />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

@@ -491,8 +491,7 @@ function JasperReports() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                             <a
                                 href={pdfUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                                download="laporan.pdf"
                                 style={{
                                     ...getBtnStyle('primary', false, true),
                                     textDecoration: 'none',
@@ -501,20 +500,26 @@ function JasperReports() {
                                     padding: '1rem'
                                 }}
                             >
-                                📄 Lihat PDF
+                                ⬇️ Download PDF
                             </a>
                             <a
-                                href={pdfUrl}
-                                download="laporan.pdf"
+                                href={pdfUrl.replace('/pdf?', '/excel?')}
+                                download="laporan.xlsx"
                                 style={{
                                     ...getBtnStyle('secondary', false, true),
                                     textDecoration: 'none',
                                     display: 'block',
                                     textAlign: 'center',
-                                    padding: '1rem'
+                                    padding: '1rem',
+                                    backgroundColor: '#16a34a',
+                                    borderBottom: '4px solid #15803d',
+                                    borderRight: '2px solid #15803d',
+                                    borderTop: '1px solid #15803d',
+                                    borderLeft: '1px solid #15803d',
+                                    color: 'white'
                                 }}
                             >
-                                ⬇️ Download PDF
+                                📊 Export Excel
                             </a>
                         </div>
                     </div>

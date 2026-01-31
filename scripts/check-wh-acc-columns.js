@@ -10,25 +10,23 @@ async function checkColumns() {
     try {
         connection = await odbc.connect(connectionString);
 
-        console.log('=== JournalVouchers columns ===');
-        const jvCols = await connection.query(`
+        console.log('=== Warehouses columns ===');
+        const whCols = await connection.query(`
             SELECT c.column_name 
             FROM syscolumn c 
             JOIN systable t ON c.table_id = t.table_id 
-            WHERE t.table_name = 'JournalVouchers'
-            ORDER BY c.column_id
+            WHERE t.table_name = 'Warehouses'
         `);
-        jvCols.forEach(c => console.log('-', c.column_name));
+        console.log(whCols.map(c => c.column_name).join(', '));
 
-        console.log('\n=== JournalVoucherDetails columns ===');
-        const jvdCols = await connection.query(`
+        console.log('\n=== Accounts columns ===');
+        const accCols = await connection.query(`
             SELECT c.column_name 
             FROM syscolumn c 
             JOIN systable t ON c.table_id = t.table_id 
-            WHERE t.table_name = 'JournalVoucherDetails'
-            ORDER BY c.column_id
+            WHERE t.table_name = 'Accounts'
         `);
-        jvdCols.forEach(c => console.log('-', c.column_name));
+        console.log(accCols.map(c => c.column_name).join(', '));
 
     } catch (error) {
         console.error('Error:', error.message);
