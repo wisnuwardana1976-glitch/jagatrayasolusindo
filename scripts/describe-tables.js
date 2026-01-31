@@ -40,9 +40,9 @@ async function describeTable(tableName) {
 }
 
 async function run() {
-    await describeTable('CashBankTransactions');
-    await describeTable('BankAccounts');
-    await describeTable('JournalVouchers');
+    await describeTable('InventoryAdjustments');
+    await describeTable('APAdjustments');
+    await describeTable('ARAdjustments');
 }
 
 run();

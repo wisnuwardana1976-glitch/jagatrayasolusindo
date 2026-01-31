@@ -4817,24 +4817,24 @@ app.put('/api/ap-adjustments/:id/post', async (req, res) => {
     await connection.query(`
       INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
       VALUES (?, ?, ?, 'Posted', 'AP_ADJUSTMENT', ?)
-    `, [jvNumber, adj.doc_date, `AP Adjustment ${adj.adjustment_type}: ${adj.doc_number}`, adj.id]);
+    `, [jvNumber, adj.doc_date, `AP Adjustment ${adj.type}: ${adj.doc_number}`, adj.id]);
 
     const jvResult = await connection.query('SELECT @@IDENTITY as id');
     const jvId = Number(jvResult[0].id);
 
     // Journal entries based on type
-    if (adj.adjustment_type === 'DEBIT') {
+    if (adj.type === 'DEBIT') {
       // Mengurangi hutang: Dr. AP (Hutang), Cr. Counter Account
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
-        [jvId, apAccountId, 'Pengurangan Hutang', adj.amount]);
+        [jvId, apAccountId, 'Pengurangan Hutang', adj.total_amount]);
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
-        [jvId, adj.counter_account_id, 'Contra AP Debit Adj', adj.amount]);
+        [jvId, adj.counter_account_id, 'Contra AP Debit Adj', adj.total_amount]);
     } else {
       // Menambah hutang: Dr. Counter Account, Cr. AP (Hutang)
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
-        [jvId, adj.counter_account_id, 'Contra AP Credit Adj', adj.amount]);
+        [jvId, adj.counter_account_id, 'Contra AP Credit Adj', adj.total_amount]);
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
-        [jvId, apAccountId, 'Penambahan Hutang', adj.amount]);
+        [jvId, apAccountId, 'Penambahan Hutang', adj.total_amount]);
     }
 
     // Update status
@@ -5056,24 +5056,24 @@ app.put('/api/ar-adjustments/:id/post', async (req, res) => {
     await connection.query(`
       INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
       VALUES (?, ?, ?, 'Posted', 'AR_ADJUSTMENT', ?)
-    `, [jvNumber, adj.doc_date, `AR Adjustment ${adj.adjustment_type}: ${adj.doc_number}`, adj.id]);
+    `, [jvNumber, adj.doc_date, `AR Adjustment ${adj.type}: ${adj.doc_number}`, adj.id]);
 
     const jvResult = await connection.query('SELECT @@IDENTITY as id');
     const jvId = Number(jvResult[0].id);
 
     // Journal entries based on type
-    if (adj.adjustment_type === 'DEBIT') {
+    if (adj.type === 'DEBIT') {
       // Menambah piutang: Dr. AR (Piutang), Cr. Counter Account
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
-        [jvId, arAccountId, 'Penambahan Piutang', adj.amount]);
+        [jvId, arAccountId, 'Penambahan Piutang', adj.total_amount]);
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
-        [jvId, adj.counter_account_id, 'Contra AR Debit Adj', adj.amount]);
+        [jvId, adj.counter_account_id, 'Contra AR Debit Adj', adj.total_amount]);
     } else {
       // Mengurangi piutang: Dr. Counter Account, Cr. AR (Piutang)
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, ?, 0)',
-        [jvId, adj.counter_account_id, 'Contra AR Credit Adj', adj.amount]);
+        [jvId, adj.counter_account_id, 'Contra AR Credit Adj', adj.total_amount]);
       await connection.query('INSERT INTO JournalVoucherDetails (jv_id, coa_id, description, debit, credit) VALUES (?, ?, ?, 0, ?)',
-        [jvId, arAccountId, 'Pengurangan Piutang', adj.amount]);
+        [jvId, arAccountId, 'Pengurangan Piutang', adj.total_amount]);
     }
 
     // Update status
