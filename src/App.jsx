@@ -49,6 +49,7 @@ import JasperReports from './pages/report/JasperReports';
 import InventoryAdjustmentList from './pages/transaction/InventoryAdjustmentList';
 import APAdjustmentList from './pages/transaction/APAdjustmentList';
 import ARAdjustmentList from './pages/transaction/ARAdjustmentList';
+import ItemConversionList from './pages/transaction/ItemConversionList';
 import './index.css';
 
 import { PeriodProvider } from './context/PeriodContext';
@@ -185,6 +186,8 @@ function App() {
                 return <ARAdjustmentList adjustmentType="DEBIT" />;
             case 'ar-credit-adjustment':
                 return <ARAdjustmentList adjustmentType="CREDIT" />;
+            case 'item-conversion':
+                return <ItemConversionList />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

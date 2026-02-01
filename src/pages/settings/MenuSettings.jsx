@@ -70,7 +70,7 @@ const defaultMenuItems = [
             { id: 'report/ar-outstanding', label: 'AR Outstanding', icon: 'file-text' },
             { id: 'report/ap-aging', label: 'AP Aging', icon: 'file-text' },
             { id: 'report/ar-aging', label: 'AR Aging', icon: 'file-text' },
-            { id: 'report/crystal-reports', label: 'Crystal Reports', icon: 'file-text' },
+            { id: 'report/crystal-reports', label: 'User Defined Report', icon: 'file-text' },
         ],
     },
     {
@@ -89,6 +89,7 @@ const defaultMenuItems = [
         items: [
             { id: 'inventory-adjustment-in', label: 'Inventory Adj. In', icon: 'download' },
             { id: 'inventory-adjustment-out', label: 'Inventory Adj. Out', icon: 'send' },
+            { id: 'item-conversion', label: 'Konversi Item', icon: 'repeat' },
             { id: 'ap-debit-adjustment', label: 'AP Debit Adj.', icon: 'file-minus' },
             { id: 'ap-credit-adjustment', label: 'AP Credit Adj.', icon: 'file-plus' },
             { id: 'ar-debit-adjustment', label: 'AR Debit Adj.', icon: 'file-plus' },

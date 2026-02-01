@@ -429,7 +429,7 @@ function CrystalReports() {
                             />
                         </div>
                         <div style={{ ...formGroupStyle, gridColumn: '1 / -1' }}>
-                            <label style={labelStyle}>Crystal File (.rpt)</label>
+                            <label style={labelStyle}>Report File (.rpt)</label>
                             <input
                                 type="text"
                                 style={inputStyle}
@@ -481,7 +481,7 @@ function CrystalReports() {
                                 <th style={thStyle}>Group</th>
                                 <th style={thStyle}>Type</th>
                                 <th style={{ ...thStyle, width: '30%' }}>Report Name</th>
-                                <th style={thStyle}>Crystal File</th>
+                                <th style={thStyle}>Report File</th>
                             </tr>
                         </thead>
                         <tbody>

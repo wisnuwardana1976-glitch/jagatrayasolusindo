@@ -71,7 +71,7 @@ const menuItems = [
             { id: 'report/ar-outstanding', label: 'AR Outstanding', icon: 'file-text' },
             { id: 'report/ap-aging', label: 'AP Aging', icon: 'file-text' },
             { id: 'report/ar-aging', label: 'AR Aging', icon: 'file-text' },
-            { id: 'report/crystal-reports', label: 'Crystal Reports', icon: 'file-text' },
+            { id: 'report/crystal-reports', label: 'User Defined Report', icon: 'file-text' },
         ],
     },
     {
@@ -90,6 +90,7 @@ const menuItems = [
         items: [
             { id: 'inventory-adjustment-in', label: 'Inventory Adj. In', icon: 'download' },
             { id: 'inventory-adjustment-out', label: 'Inventory Adj. Out', icon: 'send' },
+            { id: 'item-conversion', label: 'Konversi Item', icon: 'repeat' },
             { id: 'ap-debit-adjustment', label: 'AP Debit Adj.', icon: 'file-minus' },
             { id: 'ap-credit-adjustment', label: 'AP Credit Adj.', icon: 'file-plus' },
             { id: 'ar-debit-adjustment', label: 'AR Debit Adj.', icon: 'file-plus' },
@@ -264,6 +265,14 @@ const icons = {
             <line x1="3" y1="6" x2="3.01" y2="6"></line>
             <line x1="3" y1="12" x2="3.01" y2="12"></line>
             <line x1="3" y1="18" x2="3.01" y2="18"></line>
+        </svg>
+    ),
+    repeat: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="17 1 21 5 17 9"></polyline>
+            <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+            <polyline points="7 23 3 19 7 15"></polyline>
+            <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
         </svg>
     ),
     'settings': (

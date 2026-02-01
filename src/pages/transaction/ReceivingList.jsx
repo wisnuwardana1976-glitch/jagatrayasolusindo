@@ -125,6 +125,8 @@ function ReceivingList() {
                         return {
                             item_id: d.item_id,
                             quantity: outstanding,
+                            quantity: outstanding,
+                            unit_price: parseFloat(d.unit_price || 0),
                             remarks: ''
                         };
                     })
@@ -179,7 +181,9 @@ function ReceivingList() {
                     remarks: rec.remarks || '',
                     items: rec.details.map(d => ({
                         item_id: d.item_id,
+                        item_id: d.item_id,
                         quantity: parseFloat(d.quantity),
+                        unit_price: parseFloat(d.unit_price || 0),
                         remarks: d.remarks || ''
                     }))
                 });
@@ -273,7 +277,7 @@ function ReceivingList() {
     const addItemLine = () => {
         setFormData({
             ...formData,
-            items: [...formData.items, { item_id: '', quantity: 1, remarks: '' }]
+            items: [...formData.items, { item_id: '', quantity: 1, unit_price: 0, remarks: '' }]
         });
     };
 
@@ -402,6 +406,7 @@ function ReceivingList() {
                                         <tr>
                                             <th>Item</th>
                                             <th style={{ width: '120px' }}>Qty Terima</th>
+                                            <th style={{ width: '150px' }}>Harga Satuan</th>
                                             <th>Keterangan</th>
                                             <th style={{ width: '50px' }}></th>
                                         </tr>
@@ -437,6 +442,18 @@ function ReceivingList() {
                                                             <span style={{ fontSize: '0.85rem', color: '#666' }}>
                                                                 {items.find(i => i.id === parseInt(item.item_id))?.unit || '-'}
                                                             </span>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                                                            <span style={{ marginRight: '5px', fontSize: '0.85rem' }}>Rp</span>
+                                                            <input
+                                                                type="number"
+                                                                value={item.unit_price}
+                                                                onChange={e => updateItemLine(idx, 'unit_price', parseFloat(e.target.value))}
+                                                                disabled={!!formData.po_id || formData.status !== 'Draft'}
+                                                                style={{ width: '100px' }}
+                                                            />
                                                         </div>
                                                     </td>
                                                     <td>
