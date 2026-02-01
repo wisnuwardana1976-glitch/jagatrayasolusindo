@@ -3335,7 +3335,9 @@ app.get('/api/reports/shipment-outstanding', async (req, res) => {
 // Hutang yang belum dibayar (AP Invoice Posted)
 app.get('/api/reports/ap-outstanding', async (req, res) => {
   try {
-    const result = await executeQuery(`
+    // Query 1: AP Invoices with outstanding amount
+    // Formula: Outstanding = total_amount - paid_amount - SUM(debit_adjustment_allocations)
+    const invoices = await executeQuery(`
       SELECT 
         ap.id,
         ap.doc_number,
@@ -3343,13 +3345,51 @@ app.get('/api/reports/ap-outstanding', async (req, res) => {
         ap.due_date,
         ap.status,
         p.name as partner_name,
-        (ap.total_amount - COALESCE(ap.paid_amount, 0)) as total_amount
+        'INVOICE' as doc_type,
+        (ap.total_amount - COALESCE(ap.paid_amount, 0) - COALESCE((
+          SELECT SUM(apaa.allocated_amount)
+          FROM APAdjustmentAllocations apaa
+          JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+          WHERE apaa.ap_invoice_id = ap.id 
+          AND apa.status = 'Posted' 
+          AND apa.type = 'DEBIT'
+        ), 0)) as total_amount
       FROM APInvoices ap
       LEFT JOIN Partners p ON ap.partner_id = p.id
       WHERE ap.status IN ('Posted', 'Partial')
-      AND (ap.total_amount - COALESCE(ap.paid_amount, 0)) > 1
+      AND (ap.total_amount - COALESCE(ap.paid_amount, 0) - COALESCE((
+        SELECT SUM(apaa.allocated_amount)
+        FROM APAdjustmentAllocations apaa
+        JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+        WHERE apaa.ap_invoice_id = ap.id 
+        AND apa.status = 'Posted' 
+        AND apa.type = 'DEBIT'
+      ), 0)) > 1
       ORDER BY ap.due_date ASC, ap.doc_date ASC
     `);
+
+    // Query 2: AP Credit Adjustments (as additional debt)
+    // These are Posted credit adjustments that add to outstanding
+    const creditAdjustments = await executeQuery(`
+      SELECT 
+        apa.id,
+        apa.doc_number,
+        apa.doc_date,
+        apa.doc_date as due_date,
+        'Credit Adj' as status,
+        p.name as partner_name,
+        'CREDIT_ADJ' as doc_type,
+        apa.total_amount as total_amount
+      FROM APAdjustments apa
+      LEFT JOIN Partners p ON apa.partner_id = p.id
+      WHERE apa.type = 'CREDIT' 
+      AND apa.status = 'Posted'
+      AND apa.total_amount > 0
+      ORDER BY apa.doc_date ASC
+    `);
+
+    // Combine both results
+    const result = [...invoices, ...creditAdjustments];
 
     // Calculate days overdue
     const today = new Date();
@@ -3362,12 +3402,16 @@ app.get('/api/reports/ap-outstanding', async (req, res) => {
       return { ...item, days_overdue: daysOverdue };
     });
 
+    // Sort by due_date
+    dataWithAging.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+
     res.json({ success: true, data: dataWithAging });
   } catch (error) {
     console.error('Error fetching AP Outstanding report:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 // ==================== AR OUTSTANDING REPORT ====================
 // Piutang yang belum dibayar (AR Invoice Posted)
@@ -3411,7 +3455,8 @@ app.get('/api/reports/ar-outstanding', async (req, res) => {
 // Analisis umur hutang
 app.get('/api/reports/ap-aging', async (req, res) => {
   try {
-    const result = await executeQuery(`
+    // Query 1: AP Invoices with outstanding amount
+    const invoices = await executeQuery(`
       SELECT 
         ap.id,
         ap.doc_number,
@@ -3419,13 +3464,50 @@ app.get('/api/reports/ap-aging', async (req, res) => {
         ap.due_date,
         p.name as partner_name,
         p.id as partner_id,
-        (ap.total_amount - COALESCE(ap.paid_amount, 0)) as total_amount
+        'INVOICE' as doc_type,
+        (ap.total_amount - COALESCE(ap.paid_amount, 0) - COALESCE((
+          SELECT SUM(apaa.allocated_amount)
+          FROM APAdjustmentAllocations apaa
+          JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+          WHERE apaa.ap_invoice_id = ap.id 
+          AND apa.status = 'Posted' 
+          AND apa.type = 'DEBIT'
+        ), 0)) as total_amount
       FROM APInvoices ap
       LEFT JOIN Partners p ON ap.partner_id = p.id
       WHERE ap.status IN ('Posted', 'Partial')
-      AND (ap.total_amount - COALESCE(ap.paid_amount, 0)) > 1
+      AND (ap.total_amount - COALESCE(ap.paid_amount, 0) - COALESCE((
+        SELECT SUM(apaa.allocated_amount)
+        FROM APAdjustmentAllocations apaa
+        JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+        WHERE apaa.ap_invoice_id = ap.id 
+        AND apa.status = 'Posted' 
+        AND apa.type = 'DEBIT'
+      ), 0)) > 1
       ORDER BY p.name ASC, ap.due_date ASC
     `);
+
+    // Query 2: AP Credit Adjustments (as additional debt)
+    const creditAdjustments = await executeQuery(`
+      SELECT 
+        apa.id,
+        apa.doc_number,
+        apa.doc_date,
+        apa.doc_date as due_date,
+        p.name as partner_name,
+        p.id as partner_id,
+        'CREDIT_ADJ' as doc_type,
+        apa.total_amount as total_amount
+      FROM APAdjustments apa
+      LEFT JOIN Partners p ON apa.partner_id = p.id
+      WHERE apa.type = 'CREDIT' 
+      AND apa.status = 'Posted'
+      AND apa.total_amount > 0
+      ORDER BY p.name ASC, apa.doc_date ASC
+    `);
+
+    // Combine both results
+    const result = [...invoices, ...creditAdjustments];
 
     // Calculate aging buckets
     const today = new Date();
@@ -3464,6 +3546,13 @@ app.get('/api/reports/ap-aging', async (req, res) => {
         days61_90,
         days90plus
       };
+    });
+
+    // Sort by partner_name then due_date
+    dataWithAging.sort((a, b) => {
+      const partnerCompare = (a.partner_name || '').localeCompare(b.partner_name || '');
+      if (partnerCompare !== 0) return partnerCompare;
+      return new Date(a.due_date) - new Date(b.due_date);
     });
 
     res.json({ success: true, data: dataWithAging });
@@ -4814,13 +4903,27 @@ app.put('/api/ap-adjustments/:id/post', async (req, res) => {
 
     // Create Journal Voucher
     const jvNumber = `JV-APADJ-${adj.doc_number}`;
-    await connection.query(`
-      INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
-      VALUES (?, ?, ?, 'Posted', 'AP_ADJUSTMENT', ?)
-    `, [jvNumber, adj.doc_date, `AP Adjustment ${adj.type}: ${adj.doc_number}`, adj.id]);
 
-    const jvResult = await connection.query('SELECT @@IDENTITY as id');
-    const jvId = Number(jvResult[0].id);
+    // Check if JV already exists
+    const existingJV = await connection.query("SELECT id FROM JournalVouchers WHERE doc_number = ?", [jvNumber]);
+    let jvId;
+
+    if (existingJV.length > 0) {
+      jvId = existingJV[0].id;
+      console.log('JV already exists, using existing JV ID:', jvId);
+      // Optional: Clear existing details to ensure consistency
+      await connection.query('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+      await connection.query("UPDATE JournalVouchers SET doc_date = ?, description = ?, status = 'Posted', source_type = 'AP_ADJUSTMENT', ref_id = ? WHERE id = ?",
+        [adj.doc_date, `AP Adjustment ${adj.type}: ${adj.doc_number}`, adj.id, jvId]);
+    } else {
+      await connection.query(`
+        INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id, is_giro)
+        VALUES (?, ?, ?, 'Posted', 'AP_ADJUSTMENT', ?, 0)
+      `, [jvNumber, adj.doc_date, `AP Adjustment ${adj.type}: ${adj.doc_number}`, adj.id]);
+
+      const jvResult = await connection.query('SELECT @@IDENTITY as id');
+      jvId = Number(jvResult[0].id);
+    }
 
     // Journal entries based on type
     if (adj.type === 'DEBIT') {
@@ -4880,7 +4983,59 @@ app.put('/api/ap-adjustments/:id/unpost', async (req, res) => {
 });
 
 // Get invoices for AP allocation (only outstanding invoices)
+app.get('/api/ap-invoices/for-allocation', async (req, res) => {
+  try {
+    const { partner_id } = req.query;
+    if (!partner_id) {
+      return res.status(400).json({ success: false, error: 'partner_id is required' });
+    }
 
+    // Get outstanding invoices for the partner, considering existing adjustment allocations
+    // Outstanding = total_amount - paid_amount - SUM(debit_adjustment_allocations)
+    const result = await executeQuery(`
+      SELECT 
+        ap.id,
+        ap.doc_number,
+        ap.doc_date,
+        ap.due_date,
+        ap.total_amount,
+        COALESCE(ap.paid_amount, 0) as paid_amount,
+        COALESCE((
+          SELECT SUM(apaa.allocated_amount)
+          FROM APAdjustmentAllocations apaa
+          JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+          WHERE apaa.ap_invoice_id = ap.id 
+          AND apa.status = 'Posted' 
+          AND apa.type = 'DEBIT'
+        ), 0) as adjustment_amount,
+        (ap.total_amount - COALESCE(ap.paid_amount, 0) - COALESCE((
+          SELECT SUM(apaa.allocated_amount)
+          FROM APAdjustmentAllocations apaa
+          JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+          WHERE apaa.ap_invoice_id = ap.id 
+          AND apa.status = 'Posted' 
+          AND apa.type = 'DEBIT'
+        ), 0)) as outstanding_amount
+      FROM APInvoices ap
+      WHERE ap.partner_id = ?
+      AND ap.status IN ('Posted', 'Partial')
+      AND (ap.total_amount - COALESCE(ap.paid_amount, 0) - COALESCE((
+        SELECT SUM(apaa.allocated_amount)
+        FROM APAdjustmentAllocations apaa
+        JOIN APAdjustments apa ON apaa.adjustment_id = apa.id
+        WHERE apaa.ap_invoice_id = ap.id 
+        AND apa.status = 'Posted' 
+        AND apa.type = 'DEBIT'
+      ), 0)) > 1
+      ORDER BY ap.doc_date ASC, ap.doc_number ASC
+    `, [partner_id]);
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching AP invoices for allocation:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // ==================== AR ADJUSTMENTS ====================
 
@@ -4946,7 +5101,7 @@ app.post('/api/ar-adjustments', async (req, res) => {
     connection = await odbc.connect(connectionString);
 
     await connection.query(`
-      INSERT INTO ARAdjustments (doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, status, allocate_to_invoice)
+      INSERT INTO ARAdjustments (doc_number, doc_date, type, transcode_id, partner_id, counter_account_id, total_amount, description, status, allocate_to_invoice)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
     `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N']);
 
@@ -4977,7 +5132,7 @@ app.put('/api/ar-adjustments/:id', async (req, res) => {
     const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
 
     await executeQuery(`
-      UPDATE ARAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, amount = ?, notes = ?, allocate_to_invoice = ?, updated_at = CURRENT TIMESTAMP
+      UPDATE ARAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, total_amount = ?, description = ?, allocate_to_invoice = ?, updated_at = CURRENT TIMESTAMP
       WHERE id = ? AND status = 'Draft'
     `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', req.params.id]);
 
@@ -5053,13 +5208,26 @@ app.put('/api/ar-adjustments/:id/post', async (req, res) => {
 
     // Create Journal Voucher
     const jvNumber = `JV-ARADJ-${adj.doc_number}`;
-    await connection.query(`
-      INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id)
-      VALUES (?, ?, ?, 'Posted', 'AR_ADJUSTMENT', ?)
-    `, [jvNumber, adj.doc_date, `AR Adjustment ${adj.type}: ${adj.doc_number}`, adj.id]);
 
-    const jvResult = await connection.query('SELECT @@IDENTITY as id');
-    const jvId = Number(jvResult[0].id);
+    // Check if JV already exists
+    const existingJV = await connection.query("SELECT id FROM JournalVouchers WHERE doc_number = ?", [jvNumber]);
+    let jvId;
+
+    if (existingJV.length > 0) {
+      jvId = existingJV[0].id;
+      console.log('JV already exists, using existing JV ID:', jvId);
+      await connection.query('DELETE FROM JournalVoucherDetails WHERE jv_id = ?', [jvId]);
+      await connection.query("UPDATE JournalVouchers SET doc_date = ?, description = ?, status = 'Posted', source_type = 'AR_ADJUSTMENT', ref_id = ? WHERE id = ?",
+        [adj.doc_date, `AR Adjustment ${adj.type}: ${adj.doc_number}`, adj.id, jvId]);
+    } else {
+      await connection.query(`
+        INSERT INTO JournalVouchers (doc_number, doc_date, description, status, source_type, ref_id, is_giro)
+        VALUES (?, ?, ?, 'Posted', 'AR_ADJUSTMENT', ?, 0)
+      `, [jvNumber, adj.doc_date, `AR Adjustment ${adj.type}: ${adj.doc_number}`, adj.id]);
+
+      const jvResult = await connection.query('SELECT @@IDENTITY as id');
+      jvId = Number(jvResult[0].id);
+    }
 
     // Journal entries based on type
     if (adj.type === 'DEBIT') {

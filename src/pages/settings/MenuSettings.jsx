@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-// Default menu structure
+// Default menu structure - MUST match Sidebar.jsx menuItems
 const defaultMenuItems = [
     {
         section: 'Menu Utama',
@@ -33,6 +33,7 @@ const defaultMenuItems = [
             { id: 'warehouse', label: 'Warehouse', icon: 'home' },
             { id: 'sub-warehouse', label: 'Sub Warehouse', icon: 'box' },
             { id: 'location', label: 'Location', icon: 'map' },
+            { id: 'recalculate-inventory', label: 'Recalculate Stock', icon: 'rotate-cw' },
         ],
     },
     {
@@ -56,18 +57,46 @@ const defaultMenuItems = [
     {
         section: 'Laporan',
         items: [
+            { id: 'report/sales-summary', label: 'Laporan Penjualan', icon: 'file-text' },
+            { id: 'report/purchase-summary', label: 'Laporan Pembelian', icon: 'file-text' },
+            { id: 'report/trial-balance', label: 'Neraca Saldo', icon: 'book-open' },
+            { id: 'report/profit-loss', label: 'Laba Rugi', icon: 'dollar-sign' },
+            { id: 'report/balance-sheet', label: 'Neraca', icon: 'building' },
             { id: 'report/po-outstanding', label: 'PO Outstanding', icon: 'file-text' },
+            { id: 'report/so-outstanding', label: 'SO Outstanding', icon: 'file-text' },
+            { id: 'report/receiving-outstanding', label: 'Receiving Outstanding', icon: 'file-text' },
+            { id: 'report/shipment-outstanding', label: 'Shipment Outstanding', icon: 'file-text' },
+            { id: 'report/ap-outstanding', label: 'AP Outstanding', icon: 'file-text' },
+            { id: 'report/ar-outstanding', label: 'AR Outstanding', icon: 'file-text' },
+            { id: 'report/ap-aging', label: 'AP Aging', icon: 'file-text' },
+            { id: 'report/ar-aging', label: 'AR Aging', icon: 'file-text' },
+            { id: 'report/crystal-reports', label: 'Crystal Reports', icon: 'file-text' },
         ],
     },
     {
         section: 'Keuangan',
         items: [
-            { id: 'cash', label: 'Cash', icon: 'dollar-sign' },
-            { id: 'bank', label: 'Bank', icon: 'credit-card' },
+            { id: 'cash-in', label: 'Kas Masuk', icon: 'dollar-sign' },
+            { id: 'cash-out', label: 'Kas Keluar', icon: 'dollar-sign' },
+            { id: 'bank-in', label: 'Bank Masuk', icon: 'credit-card' },
+            { id: 'bank-out', label: 'Bank Keluar', icon: 'credit-card' },
             { id: 'journal-voucher', label: 'Jurnal Voucher', icon: 'book-open' },
+            { id: 'system-generated-journal', label: 'Auto Journal', icon: 'file-text' },
+        ],
+    },
+    {
+        section: 'Adjustment',
+        items: [
+            { id: 'inventory-adjustment-in', label: 'Inventory Adj. In', icon: 'download' },
+            { id: 'inventory-adjustment-out', label: 'Inventory Adj. Out', icon: 'send' },
+            { id: 'ap-debit-adjustment', label: 'AP Debit Adj.', icon: 'file-minus' },
+            { id: 'ap-credit-adjustment', label: 'AP Credit Adj.', icon: 'file-plus' },
+            { id: 'ar-debit-adjustment', label: 'AR Debit Adj.', icon: 'file-plus' },
+            { id: 'ar-credit-adjustment', label: 'AR Credit Adj.', icon: 'file-minus' },
         ],
     },
 ];
+
 
 function MenuSettings() {
     const [menuConfig, setMenuConfig] = useState([]);
