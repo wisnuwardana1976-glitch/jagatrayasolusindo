@@ -3107,7 +3107,7 @@ app.get('/api/reports/po-outstanding', async (req, res) => {
 
 
 // ==================== INVENTORY ====================
-app.post('/api/inventory/recalculate', async (req, res) => {
+app.post('/api/inventory/recalculate-deprecated', async (req, res) => {
   try {
     console.log('Starting Inventory Recalculation...');
 
@@ -6932,6 +6932,210 @@ app.put('/api/item-conversions/:id/unpost', async (req, res) => {
     res.json({ success: true, message: 'Konversi item berhasil di-unpost' });
   } catch (error) {
     console.error('Error unposting item conversion:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// ==================== RECALCULATE STOCK ====================
+
+app.post('/api/inventory/recalculate', async (req, res) => {
+  let connection;
+  try {
+    const { warehouse_id, item_id } = req.body || {};
+    console.log('🔄 Starting Stock Recalculation...', { warehouse_id, item_id });
+
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    // 1. Get Items
+    let itemQuery = 'SELECT id, code, standard_cost FROM Items';
+    let itemParams = [];
+    if (item_id) {
+      itemQuery += ' WHERE id = ?';
+      itemParams.push(item_id);
+    }
+    const items = await connection.query(itemQuery, itemParams);
+    console.log(`Processing ${items.length} items...`);
+
+    for (const item of items) {
+      // Clear Stock
+      if (warehouse_id) {
+        await connection.query('DELETE FROM ItemStocks WHERE item_id = ? AND warehouse_id = ?', [item.id, warehouse_id]);
+      } else {
+        await connection.query('DELETE FROM ItemStocks WHERE item_id = ?', [item.id]);
+      }
+
+      // 2. Fetch Transactions
+      // RECEIVINGS (IN)
+      // Check if unit_price exists in ReceivingDetails (added by script), fallback to PO
+      let rxQuery = `
+        SELECT 'IN' as dir, 'RCV' as type, r.doc_date, r.created_at, 
+               rd.quantity, 
+               COALESCE(rd.unit_price, pod.unit_price, i.standard_cost, 0) as cost,
+               r.warehouse_id, rd.location_id
+        FROM ReceivingDetails rd
+        JOIN Receivings r ON rd.receiving_id = r.id
+        LEFT JOIN PurchaseOrderDetails pod ON rd.po_detail_id = pod.id
+        JOIN Items i ON rd.item_id = i.id
+        WHERE rd.item_id = ? AND r.status = 'Posted'
+      `;
+      if (warehouse_id) rxQuery += ` AND r.warehouse_id = ${warehouse_id}`;
+
+      // SHIPMENTS (OUT)
+      // Warehouse ID missing in Shipments, using Fallback to First Warehouse
+      let shQuery = `
+        SELECT 'OUT' as dir, 'SHP' as type, s.doc_date, s.created_at,
+               sd.quantity, 0 as cost,
+               (SELECT TOP 1 id FROM Warehouses) as warehouse_id, NULL as location_id
+        FROM ShipmentDetails sd
+        JOIN Shipments s ON sd.shipment_id = s.id
+        WHERE sd.item_id = ? AND s.status = 'Posted'
+      `;
+      if (warehouse_id) shQuery += ` AND (SELECT TOP 1 id FROM Warehouses) = ${warehouse_id}`;
+
+      // INVENTORY ADJUSTMENTS (IN/OUT)
+      // Assuming warehouse_id is on Header
+      let adjQuery = `
+        SELECT 
+          CASE WHEN d.quantity > 0 THEN 'IN' ELSE 'OUT' END as dir,
+          'ADJ' as type, h.doc_date, h.created_at,
+          ABS(d.quantity) as quantity, d.unit_cost as cost,
+          h.warehouse_id, NULL as location_id
+        FROM InventoryAdjustmentDetails d
+        JOIN InventoryAdjustments h ON d.adjustment_id = h.id
+        WHERE d.item_id = ? AND h.status = 'Posted'
+      `;
+      if (warehouse_id) adjQuery += ` AND h.warehouse_id = ${warehouse_id}`;
+
+      // Execute Queries
+      let transactions = [];
+      try {
+        const rxs = await connection.query(rxQuery, [item.id]);
+        if (Array.isArray(rxs)) transactions.push(...rxs);
+      } catch (e) { console.warn('Error fetching Receivings:', e.message); }
+
+      try {
+        const shs = await connection.query(shQuery, [item.id]);
+        if (Array.isArray(shs)) transactions.push(...shs);
+      } catch (e) { console.warn('Error fetching Shipments:', e.message); }
+
+      try {
+        const adjs = await connection.query(adjQuery, [item.id]);
+        if (Array.isArray(adjs)) transactions.push(...adjs);
+      } catch (e) { console.warn('Error fetching Adjustments:', e.message); }
+
+      // Sort
+      transactions.sort((a, b) => {
+        const da = new Date(a.doc_date);
+        const db = new Date(b.doc_date);
+        if (da.getTime() !== db.getTime()) return da - db;
+        // if dates equal, IN first? or by ID/Created?
+        // Let's rely on created_at or default stable sort
+        return 0;
+      });
+
+      // 3. Calculate
+      // Map: WarehouseID -> { qty, value, locs: { LocID: qty } }
+      // Issue: ItemStocks is granular by Location. Shipments don't have location.
+      // Logic: 
+      // - Receivings add to specific Location.
+      // - Shipments subtract from Warehouse Total. How to distribute?
+      //   Strategy:
+      //   We can't strictly reconstruct Location quantities if Shipments don't specify them.
+      //   We will try to deduct from "Largest Stock" location (FIFO-ish).
+
+      let whStock = {}; // { whId: { totalQty: 0, totalVal: 0, avg: 0, locations: { locId: qty } } }
+
+      for (const tx of transactions) {
+        const whId = tx.warehouse_id || 0;
+        if (!whStock[whId]) whStock[whId] = { is_valid: !!tx.warehouse_id, totalQty: 0, totalVal: 0, avg: 0, locations: {} };
+
+        const locId = tx.location_id || 0; // 0 = Unknown
+
+        if (tx.dir === 'IN') {
+          const qty = Number(tx.quantity);
+          const cost = Number(tx.cost);
+          const val = qty * cost;
+
+          // Update Warehouse Totals
+          const oldQty = whStock[whId].totalQty;
+          const oldVal = whStock[whId].totalVal;
+
+          whStock[whId].totalQty += qty;
+          whStock[whId].totalVal += val;
+          if (whStock[whId].totalQty !== 0) {
+            whStock[whId].avg = whStock[whId].totalVal / whStock[whId].totalQty;
+          }
+
+          // Update Location
+          whStock[whId].locations[locId] = (whStock[whId].locations[locId] || 0) + qty;
+
+        } else { // OUT
+          const qty = Number(tx.quantity);
+          const cost = whStock[whId].avg; // Use current moving average
+          const val = qty * cost;
+
+          whStock[whId].totalQty -= qty;
+          whStock[whId].totalVal -= val;
+          // Avg stays same technically, or recompute? 
+          // If Qty hits 0, Avg is tricky. Keep last known avg.
+
+          // Deduct from Location
+          if (tx.location_id) {
+            // Precise deduction
+            whStock[whId].locations[locId] = (whStock[whId].locations[locId] || 0) - qty;
+          } else {
+            // Heuristic Deduction (Shipment with no location)
+            // Find location with enough stock? Or biggest stock?
+            // Simple approach: Deduct from largest pile
+            let remaining = qty;
+            // Sort locations by qty desc
+            const locKeys = Object.keys(whStock[whId].locations).sort((a, b) => whStock[whId].locations[b] - whStock[whId].locations[a]);
+
+            for (const lKey of locKeys) {
+              if (remaining <= 0) break;
+              const available = whStock[whId].locations[lKey];
+              if (available > 0) {
+                const take = Math.min(available, remaining);
+                whStock[whId].locations[lKey] -= take;
+                remaining -= take;
+              }
+            }
+            // If still remaining, dump in Default/Unknown location (0)
+            if (remaining > 0) {
+              whStock[whId].locations[0] = (whStock[whId].locations[0] || 0) - remaining;
+            }
+          }
+        }
+      }
+
+      // 4. Save to DB
+      for (const whId in whStock) {
+        if (!whStock[whId].is_valid) continue; // Skip unknown warehouse
+        const data = whStock[whId];
+
+        // Loop locations
+        for (const locId in data.locations) {
+          const qty = data.locations[locId];
+          // Only save if qty != 0? Or save all?
+          // Save all to be safe, clean up zeros later if needed.
+          // Use Warehouse Avg for the record
+
+          await connection.query(`
+             INSERT INTO ItemStocks (item_id, warehouse_id, location_id, quantity, average_cost, last_updated)
+             VALUES (?, ?, ?, ?, ?, CURRENT TIMESTAMP)
+           `, [item.id, whId, locId === '0' ? null : locId, qty, data.avg]);
+        }
+      }
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'Recalculation complete' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error('Recalculate Error:', error);
     res.status(500).json({ success: false, error: error.message });
   } finally {
     if (connection) await connection.close();

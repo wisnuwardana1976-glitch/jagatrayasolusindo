@@ -15,6 +15,10 @@ function RecalculateInventory() {
         try {
             const response = await fetch('/api/inventory/recalculate', {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
             });
             const data = await response.json();
 
@@ -34,13 +38,21 @@ function RecalculateInventory() {
         <div className="card">
             <h2 className="title">Recalculate Inventory</h2>
             <p className="mb-4">
-                Fitur ini akan menghitung ulang jumlah stok di setiap gudang dan biaya rata-rata (Average Cost) item
-                berdasarkan seluruh riwayat transaksi Pembelian (Receiving) dan Penjualan (Shipment).
+                Fitur ini akan menghapus stok saat ini dan membangun ulang <strong>dari nol</strong> berdasarkan seluruh riwayat transaksi:
+                <ul className="list-disc ml-5 mt-2">
+                    <li>Penerimaan Barang (Receivings)</li>
+                    <li>Pengiriman Barang (Shipments)</li>
+                    <li>Penyesuaian Stok (Adjustments)</li>
+                    <li>Transfer Stok</li>
+                    <li>Konversi Item</li>
+                </ul>
+                <br />
+                Proses ini akan memperbaiki jumlah stok dan perhitungan HPP (Average Cost).
             </p>
 
             <div className="alert alert-warning mb-4">
-                <strong>Perhatian:</strong> Proses ini mungkin memakan waktu tergantung jumlah transaksi.
-                Pastikan tidak ada transaksi yang sedang berlangsung saat proses ini dijalankan.
+                <strong>Perhatian:</strong> Proses ini mungkin memakan waktu lama.
+                Pastikan tidak ada transaksi yang sedang berlangsung.
             </div>
 
             <button
@@ -48,7 +60,7 @@ function RecalculateInventory() {
                 onClick={handleRecalculate}
                 disabled={loading}
             >
-                {loading ? 'Sedang Memproses...' : 'Mulai Hitung Ulang'}
+                {loading ? 'Sedang Memproses...' : 'Mulai Hitung Ulang (Fix All)'}
             </button>
 
             {result && (
