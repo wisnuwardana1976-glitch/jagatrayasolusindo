@@ -6229,8 +6229,12 @@ app.get('/api/reports/stock-summary', async (req, res) => {
         COALESCE(i.standard_cost, 0) as standard_cost,
         COALESCE(i.standard_price, 0) as standard_price,
         COALESCE(SUM(s.quantity), 0) as total_quantity,
-        COALESCE(AVG(s.average_cost), i.standard_cost, 0) as average_cost,
-        COALESCE(SUM(s.quantity), 0) * COALESCE(AVG(s.average_cost), i.standard_cost, 0) as total_value
+        CASE 
+          WHEN COALESCE(SUM(s.quantity), 0) <> 0 
+          THEN SUM(COALESCE(s.quantity, 0) * COALESCE(s.average_cost, 0)) / SUM(s.quantity) 
+          ELSE COALESCE(i.standard_cost, 0) 
+        END as average_cost,
+        SUM(COALESCE(s.quantity, 0) * COALESCE(s.average_cost, 0)) as total_value
       FROM Items i
       LEFT JOIN ItemStocks s ON i.id = s.item_id
       LEFT JOIN Units u ON i.unit = u.name OR CAST(i.unit AS VARCHAR(50)) = CAST(u.id AS VARCHAR(50))
