@@ -2372,6 +2372,49 @@ app.put('/api/ap-invoices/:id/unpost', async (req, res) => {
   }
 });
 
+// Get invoices for AR allocation (Must be defined before /:id)
+app.get('/api/ar-invoices/for-allocation', async (req, res) => {
+  try {
+    const { partner_id } = req.query;
+    if (!partner_id) {
+      return res.status(400).json({ success: false, error: 'partner_id required' });
+    }
+
+    const result = await executeQuery(`
+      SELECT 
+        ar.id, 
+        ar.doc_number, 
+        ar.doc_date, 
+        ar.total_amount,
+        COALESCE(ar.paid_amount, 0) as paid_amount,
+        (ar.total_amount - COALESCE(ar.paid_amount, 0) - COALESCE((
+          SELECT SUM(araa.allocated_amount)
+          FROM ARAdjustmentAllocations araa
+          JOIN ARAdjustments adj ON araa.adjustment_id = adj.id
+          WHERE araa.ar_invoice_id = ar.id 
+          AND adj.status = 'Posted'
+          AND adj.type = 'CREDIT'
+        ), 0)) as outstanding_amount
+      FROM ARInvoices ar
+      WHERE ar.partner_id = ? 
+      AND ar.status IN ('Posted', 'Partial')
+      AND (ar.total_amount - COALESCE(ar.paid_amount, 0) - COALESCE((
+        SELECT SUM(araa.allocated_amount)
+        FROM ARAdjustmentAllocations araa
+        JOIN ARAdjustments adj ON araa.adjustment_id = adj.id
+        WHERE araa.ar_invoice_id = ar.id 
+        AND adj.status = 'Posted'
+        AND adj.type = 'CREDIT'
+      ), 0)) > 1
+      ORDER BY ar.doc_date ASC
+    `, [partner_id]);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching AR invoices for allocation:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.get('/api/ar-invoices', async (req, res) => {
   try {
     const result = await executeQuery(`
@@ -3155,14 +3198,29 @@ app.post('/api/inventory/recalculate', async (req, res) => {
     let itemsUpdated = 0;
     let stocksInserted = 0;
 
-    // Get valid warehouse IDs from database
+    // Get valid warehouse IDs and their default locations from database
     let validWarehouses = new Set();
+    let warehouseDefaultLoc = {}; // WarehouseID -> LocationID
+
     try {
       const warehouses = await executeQuery('SELECT id FROM Warehouses');
       warehouses.forEach(w => validWarehouses.add(String(w.id)));
+
+      // Get default locations (first location for each warehouse)
+      const locations = await executeQuery(`
+        SELECT w.id as wh_id, MIN(l.id) as loc_id
+        FROM Warehouses w
+        JOIN SubWarehouses sw ON w.id = sw.warehouse_id
+        JOIN Locations l ON sw.id = l.sub_warehouse_id
+        GROUP BY w.id
+      `);
+      locations.forEach(l => {
+        warehouseDefaultLoc[String(l.wh_id)] = l.loc_id;
+      });
+
       console.log('Valid warehouses:', validWarehouses.size);
     } catch (e) {
-      console.error('Failed to fetch warehouses:', e.message);
+      console.error('Failed to fetch warehouses/locations:', e.message);
     }
 
     // Update ItemStocks table
@@ -3171,9 +3229,10 @@ app.post('/api/inventory/recalculate', async (req, res) => {
       // Only insert if warehouse is known AND exists in Warehouses table
       if (warehouseId && warehouseId !== 'null' && warehouseId !== 'undefined' && validWarehouses.has(warehouseId)) {
         try {
+          const locId = warehouseDefaultLoc[warehouseId] || null;
           await executeQuery(
-            'INSERT INTO ItemStocks (item_id, warehouse_id, quantity) VALUES (?, ?, ?)',
-            [itemId, warehouseId, qty]
+            'INSERT INTO ItemStocks (item_id, warehouse_id, quantity, location_id) VALUES (?, ?, ?, ?)',
+            [itemId, warehouseId, qty, locId]
           );
           stocksInserted++;
         } catch (insertErr) {
@@ -3417,7 +3476,9 @@ app.get('/api/reports/ap-outstanding', async (req, res) => {
 // Piutang yang belum dibayar (AR Invoice Posted)
 app.get('/api/reports/ar-outstanding', async (req, res) => {
   try {
-    const result = await executeQuery(`
+    // Query 1: AR Invoices with outstanding amount
+    // Formula: Outstanding = total_amount - paid_amount - SUM(credit_adjustment_allocations)
+    const invoices = await executeQuery(`
       SELECT 
         ar.id,
         ar.doc_number,
@@ -3425,13 +3486,51 @@ app.get('/api/reports/ar-outstanding', async (req, res) => {
         ar.due_date,
         ar.status,
         p.name as partner_name,
-        (ar.total_amount - COALESCE(ar.paid_amount, 0)) as total_amount
+        'INVOICE' as doc_type,
+        (ar.total_amount - COALESCE(ar.paid_amount, 0) - COALESCE((
+          SELECT SUM(araa.allocated_amount)
+          FROM ARAdjustmentAllocations araa
+          JOIN ARAdjustments ara ON araa.adjustment_id = ara.id
+          WHERE araa.ar_invoice_id = ar.id 
+          AND ara.status = 'Posted' 
+          AND ara.type = 'CREDIT'
+        ), 0)) as total_amount
       FROM ARInvoices ar
       LEFT JOIN Partners p ON ar.partner_id = p.id
       WHERE ar.status IN ('Posted', 'Partial')
-      AND (ar.total_amount - COALESCE(ar.paid_amount, 0)) > 1
+      AND (ar.total_amount - COALESCE(ar.paid_amount, 0) - COALESCE((
+        SELECT SUM(araa.allocated_amount)
+        FROM ARAdjustmentAllocations araa
+        JOIN ARAdjustments ara ON araa.adjustment_id = ara.id
+        WHERE araa.ar_invoice_id = ar.id 
+        AND ara.status = 'Posted' 
+        AND ara.type = 'CREDIT'
+      ), 0)) > 1
       ORDER BY ar.due_date ASC, ar.doc_date ASC
     `);
+
+    // Query 2: AR Debit Adjustments (as additional receivables)
+    // These are Posted debit adjustments that add to outstanding
+    const debitAdjustments = await executeQuery(`
+      SELECT 
+        ara.id,
+        ara.doc_number,
+        ara.doc_date,
+        ara.doc_date as due_date,
+        'Debit Adj' as status,
+        p.name as partner_name,
+        'DEBIT_ADJ' as doc_type,
+        ara.total_amount as total_amount
+      FROM ARAdjustments ara
+      LEFT JOIN Partners p ON ara.partner_id = p.id
+      WHERE ara.type = 'DEBIT' 
+      AND ara.status = 'Posted'
+      AND ara.total_amount > 0
+      ORDER BY ara.doc_date ASC
+    `);
+
+    // Combine both results
+    const result = [...invoices, ...debitAdjustments];
 
     // Calculate days overdue
     const today = new Date();
@@ -3443,6 +3542,9 @@ app.get('/api/reports/ar-outstanding', async (req, res) => {
       }
       return { ...item, days_overdue: daysOverdue };
     });
+
+    // Sort by due_date
+    dataWithAging.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
 
     res.json({ success: true, data: dataWithAging });
   } catch (error) {
@@ -3566,7 +3668,8 @@ app.get('/api/reports/ap-aging', async (req, res) => {
 // Analisis umur piutang
 app.get('/api/reports/ar-aging', async (req, res) => {
   try {
-    const result = await executeQuery(`
+    // Query 1: AR Invoices with outstanding amount
+    const invoices = await executeQuery(`
       SELECT 
         ar.id,
         ar.doc_number,
@@ -3574,13 +3677,50 @@ app.get('/api/reports/ar-aging', async (req, res) => {
         ar.due_date,
         p.name as partner_name,
         p.id as partner_id,
-        (ar.total_amount - COALESCE(ar.paid_amount, 0)) as total_amount
+        'INVOICE' as doc_type,
+        (ar.total_amount - COALESCE(ar.paid_amount, 0) - COALESCE((
+          SELECT SUM(araa.allocated_amount)
+          FROM ARAdjustmentAllocations araa
+          JOIN ARAdjustments ara ON araa.adjustment_id = ara.id
+          WHERE araa.ar_invoice_id = ar.id 
+          AND ara.status = 'Posted' 
+          AND ara.type = 'CREDIT'
+        ), 0)) as total_amount
       FROM ARInvoices ar
       LEFT JOIN Partners p ON ar.partner_id = p.id
       WHERE ar.status IN ('Posted', 'Partial')
-      AND (ar.total_amount - COALESCE(ar.paid_amount, 0)) > 1
+      AND (ar.total_amount - COALESCE(ar.paid_amount, 0) - COALESCE((
+        SELECT SUM(araa.allocated_amount)
+        FROM ARAdjustmentAllocations araa
+        JOIN ARAdjustments ara ON araa.adjustment_id = ara.id
+        WHERE araa.ar_invoice_id = ar.id 
+        AND ara.status = 'Posted' 
+        AND ara.type = 'CREDIT'
+      ), 0)) > 1
       ORDER BY p.name ASC, ar.due_date ASC
     `);
+
+    // Query 2: AR Debit Adjustments (as additional receivables)
+    const debitAdjustments = await executeQuery(`
+      SELECT 
+        ara.id,
+        ara.doc_number,
+        ara.doc_date,
+        ara.doc_date as due_date,
+        p.name as partner_name,
+        p.id as partner_id,
+        'DEBIT_ADJ' as doc_type,
+        ara.total_amount as total_amount
+      FROM ARAdjustments ara
+      LEFT JOIN Partners p ON ara.partner_id = p.id
+      WHERE ara.type = 'DEBIT' 
+      AND ara.status = 'Posted'
+      AND ara.total_amount > 0
+      ORDER BY p.name ASC, ara.doc_date ASC
+    `);
+
+    // Combine both results
+    const result = [...invoices, ...debitAdjustments];
 
     // Calculate aging buckets
     const today = new Date();
@@ -3621,12 +3761,20 @@ app.get('/api/reports/ar-aging', async (req, res) => {
       };
     });
 
+    // Sort by partner_name then due_date
+    dataWithAging.sort((a, b) => {
+      const partnerCompare = (a.partner_name || '').localeCompare(b.partner_name || '');
+      if (partnerCompare !== 0) return partnerCompare;
+      return new Date(a.due_date) - new Date(b.due_date);
+    });
+
     res.json({ success: true, data: dataWithAging });
   } catch (error) {
     console.error('Error fetching AR Aging report:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 
 // ==================== SALES SUMMARY REPORT ====================
@@ -5044,12 +5192,13 @@ app.get('/api/ar-adjustments', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     let query = `
-      SELECT ara.*, p.name as partner_name, a.name as counter_account_name, t.code as transcode_code
+      SELECT ara.*, ara.type as adjustment_type, p.name as partner_name, a.name as counter_account_name, t.code as transcode_code
       FROM ARAdjustments ara
       LEFT JOIN Partners p ON ara.partner_id = p.id
       LEFT JOIN Accounts a ON ara.counter_account_id = a.id
       LEFT JOIN Transcodes t ON ara.transcode_id = t.id
     `;
+
     const params = [];
     if (startDate && endDate) {
       query += ' WHERE ara.doc_date BETWEEN ? AND ?';
@@ -5286,25 +5435,1045 @@ app.put('/api/ar-adjustments/:id/unpost', async (req, res) => {
   }
 });
 
-// Get invoices for AR allocation
-app.get('/api/ar-invoices/for-allocation', async (req, res) => {
+
+
+
+
+
+// ==========================================
+// RECEIVINGS (PENERIMAAN BARANG)
+// ==========================================
+
+// Get List
+app.get('/api/receivings', async (req, res) => {
   try {
-    const { partner_id } = req.query;
-    if (!partner_id) {
-      return res.status(400).json({ success: false, error: 'partner_id required' });
+    let query = `
+      SELECT r.id, r.doc_number, r.doc_date, r.status, r.remarks, 
+             p.name as partner_name, l.name as location_name,
+             po.doc_number as po_number,
+             (SELECT SUM(quantity) FROM ReceivingDetails WHERE receiving_id = r.id) as total_received
+      FROM Receivings r
+      LEFT JOIN Partners p ON r.partner_id = p.id
+      LEFT JOIN Locations l ON r.location_id = l.id
+      LEFT JOIN PurchaseOrders po ON r.po_id = po.id
+      WHERE 1=1
+    `;
+    const params = [];
+    if (req.query.startDate && req.query.endDate) {
+      query += ` AND r.doc_date BETWEEN ? AND ?`;
+      params.push(req.query.startDate, req.query.endDate);
     }
-    const result = await executeQuery(`
-      SELECT id, doc_number, doc_date, 
-        (SELECT SUM(quantity * unit_price) FROM ARInvoiceDetails WHERE ar_invoice_id = ARInvoices.id) as total_amount
-      FROM ARInvoices 
-      WHERE partner_id = ? AND status = 'Posted'
-      ORDER BY doc_date DESC
-    `, [partner_id]);
-    res.json({ success: true, data: result });
+    query += ` ORDER BY r.doc_number DESC`;
+
+    const result = await executeQuery(query, params);
+    const safeResult = result.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+    res.json({ success: true, data: safeResult });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// Get Detail
+app.get('/api/receivings/:id', async (req, res) => {
+  try {
+    const headerResult = await executeQuery(`SELECT * FROM Receivings WHERE id = ?`, [req.params.id]);
+    if (headerResult.length === 0) return res.status(404).json({ success: false, error: 'Receiving not found' });
+
+    const header = headerResult[0];
+    for (const key in header) {
+      if (typeof header[key] === 'bigint') header[key] = Number(header[key]);
+    }
+
+    const detailsResult = await executeQuery(`
+      SELECT rd.*, i.code as item_code, i.name as item_name, i.unit
+      FROM ReceivingDetails rd
+      JOIN Items i ON rd.item_id = i.id
+      WHERE rd.receiving_id = ?
+    `, [req.params.id]);
+
+    header.details = detailsResult.map(d => {
+      const newD = { ...d };
+      for (const key in newD) {
+        if (typeof newD[key] === 'bigint') newD[key] = Number(newD[key]);
+      }
+      return newD;
+    });
+
+    res.json({ success: true, data: header });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create
+app.post('/api/receivings', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    const { doc_number, doc_date, po_id, partner_id, location_id, transcode_id, remarks, items, status } = req.body;
+
+    // Insert Header
+    await connection.query(`
+      INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, location_id, transcode_id, remarks, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [doc_number, doc_date, po_id || null, partner_id || null, location_id || null, transcode_id || null, remarks || '', status || 'Draft']);
+
+    const idRes = await connection.query('SELECT @@IDENTITY as id');
+    const receivingId = Number(idRes[0].id);
+
+    // Insert Details
+    for (const item of items) {
+      await connection.query(`
+        INSERT INTO ReceivingDetails (receiving_id, item_id, quantity, remarks, po_detail_id)
+        VALUES (?, ?, ?, ?, ?)
+      `, [receivingId, item.item_id, item.quantity, item.remarks || '', item.po_detail_id || null]);
+    }
+
+    // Update Transcode
+    if (transcode_id) {
+      await connection.query(`UPDATE Transcodes SET last_number = last_number + 1 WHERE id = ?`, [transcode_id]);
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'Receiving created successfully', id: receivingId });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Update
+app.put('/api/receivings/:id', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    const { doc_date, po_id, partner_id, location_id, remarks, items, status } = req.body;
+
+    const [rec] = await connection.query('SELECT status FROM Receivings WHERE id = ?', [req.params.id]);
+    if (rec && rec.status !== 'Draft') {
+      return res.status(400).json({ success: false, error: 'Only Draft can be updated' });
+    }
+
+    // Update Header
+    await connection.query(`
+      UPDATE Receivings 
+      SET doc_date = ?, po_id = ?, partner_id = ?, location_id = ?, remarks = ?, status = ?
+      WHERE id = ?
+    `, [doc_date, po_id || null, partner_id || null, location_id || null, remarks || '', status || 'Draft', req.params.id]);
+
+    // Delete and Re-insert Details
+    await connection.query('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
+    for (const item of items) {
+      await connection.query(`
+        INSERT INTO ReceivingDetails (receiving_id, item_id, quantity, remarks, po_detail_id)
+        VALUES (?, ?, ?, ?, ?)
+      `, [req.params.id, item.item_id, item.quantity, item.remarks || '', item.po_detail_id || null]);
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'Receiving updated successfully' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Delete
+app.delete('/api/receivings/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT status FROM Receivings WHERE id = ?', [req.params.id]);
+    if (result.length > 0 && result[0].status !== 'Draft') {
+      return res.status(400).json({ success: false, error: 'Only Draft can be deleted' });
+    }
+    await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM Receivings WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Receiving deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Approve (Post)
+app.put('/api/receivings/:id/approve', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    const [rec] = await connection.query(`
+      SELECT r.*, l.sub_warehouse_id, sw.warehouse_id 
+      FROM Receivings r
+      LEFT JOIN Locations l ON r.location_id = l.id
+      LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+      WHERE r.id = ?
+    `, [req.params.id]);
+
+    if (!rec) return res.status(404).json({ success: false, error: 'Receiving not found' });
+    if (rec.status !== 'Draft') return res.status(400).json({ success: false, error: 'Only Draft can be posted' });
+    if (!rec.location_id) return res.status(400).json({ success: false, error: 'Location ID is required for posting' });
+
+    const details = await connection.query('SELECT * FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
+
+    for (const item of details) {
+      // 1. Determine Unit Cost
+      let unitCost = 0;
+      if (item.po_detail_id) {
+        const [poDetail] = await connection.query('SELECT unit_price FROM PurchaseOrderDetails WHERE id = ?', [item.po_detail_id]);
+        unitCost = poDetail ? Number(poDetail.unit_price) : 0;
+      } else {
+        const [itemMaster] = await connection.query('SELECT standard_cost FROM Items WHERE id = ?', [item.item_id]);
+        unitCost = itemMaster ? Number(itemMaster.standard_cost) : 0;
+      }
+
+      // 2. Update Stock
+      const stockResult = await connection.query(`
+        SELECT quantity, average_cost FROM ItemStocks 
+        WHERE item_id = ? AND warehouse_id = ? AND location_id = ?
+      `, [item.item_id, rec.warehouse_id, item.location_id || rec.location_id]);
+
+      let newQty = Number(item.quantity);
+      let newAvgCost = unitCost;
+
+      if (stockResult.length > 0) {
+        const currentQty = Number(stockResult[0].quantity);
+        const currentAvgCost = Number(stockResult[0].average_cost || 0);
+
+        const totalQty = currentQty + newQty;
+        if (totalQty > 0) {
+          newAvgCost = ((currentQty * currentAvgCost) + (newQty * unitCost)) / totalQty;
+        } else {
+          newAvgCost = currentAvgCost;
+        }
+
+        await connection.query(`
+          UPDATE ItemStocks 
+          SET quantity = quantity + ?, average_cost = ?, last_updated = CURRENT TIMESTAMP 
+          WHERE item_id = ? AND warehouse_id = ? AND location_id = ?
+        `, [newQty, newAvgCost, item.item_id, rec.warehouse_id, item.location_id || rec.location_id]);
+      } else {
+        await connection.query(`
+          INSERT INTO ItemStocks (item_id, warehouse_id, location_id, quantity, average_cost)
+          VALUES (?, ?, ?, ?, ?)
+        `, [item.item_id, rec.warehouse_id, item.location_id || rec.location_id, newQty, newAvgCost]);
+      }
+    }
+
+    // 3. Update Status
+    await connection.query(`UPDATE Receivings SET status = 'Posted', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Receiving posted successfully' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// Unapprove (Unpost)
+app.put('/api/receivings/:id/unapprove', async (req, res) => {
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    const [rec] = await connection.query(`
+      SELECT r.*, l.sub_warehouse_id, sw.warehouse_id 
+      FROM Receivings r
+      LEFT JOIN Locations l ON r.location_id = l.id
+      LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+      WHERE r.id = ?
+    `, [req.params.id]);
+
+    if (!rec) return res.status(404).json({ success: false, error: 'Receiving not found' });
+    if (rec.status !== 'Posted') return res.status(400).json({ success: false, error: 'Only Posted can be unposted' });
+
+    const details = await connection.query('SELECT * FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
+
+    for (const item of details) {
+      // Revert Stock (Decrease Qty, Avg Cost remains the same as it's a removal)
+      await connection.query(`
+        UPDATE ItemStocks 
+        SET quantity = quantity - ?, last_updated = CURRENT TIMESTAMP 
+        WHERE item_id = ? AND warehouse_id = ? AND location_id = ?
+      `, [item.quantity, item.item_id, rec.warehouse_id, item.location_id || rec.location_id]);
+    }
+
+    // Update Status
+    await connection.query(`UPDATE Receivings SET status = 'Draft', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [req.params.id]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Receiving unposted successfully' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+
+// ==========================================
+// LOCATION TRANSFERS
+// ==========================================
+
+// Get Locations List (for Dropdown)
+app.get('/api/locations', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT l.id, l.code, l.name, sw.name as sub_warehouse_name, w.name as warehouse_name
+      FROM Locations l
+      LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+      LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
+      ORDER BY w.code, sw.code, l.code
+    `);
+    const safeResult = result.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+    res.json({ success: true, data: safeResult });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get List
+app.get('/api/location-transfers', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT 
+        lt.id, lt.doc_number, lt.doc_date, lt.source_location_id, lt.destination_location_id, 
+        lt.status, CAST(lt.notes AS VARCHAR(2000)) as notes, lt.transcode_id, lt.created_at, lt.updated_at,
+        l_src.code as source_location_code,
+        l_src.name as source_location_name,
+        w_src.description as source_warehouse_name,
+        l_dest.code as destination_location_code,
+        l_dest.name as destination_location_name,
+        w_dest.description as destination_warehouse_name
+      FROM LocationTransfers lt
+      LEFT JOIN Locations l_src ON lt.source_location_id = l_src.id
+      LEFT JOIN Locations l_dest ON lt.destination_location_id = l_dest.id
+      LEFT JOIN SubWarehouses sw_src ON l_src.sub_warehouse_id = sw_src.id
+      LEFT JOIN SubWarehouses sw_dest ON l_dest.sub_warehouse_id = sw_dest.id
+      LEFT JOIN Warehouses w_src ON sw_src.warehouse_id = w_src.id
+      LEFT JOIN Warehouses w_dest ON sw_dest.warehouse_id = w_dest.id
+      ORDER BY lt.doc_number DESC
+    `);
+    const safeResult = result.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+    res.json({ success: true, data: safeResult });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get Detail
+app.get('/api/location-transfers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const transfer = await executeQuery(`
+      SELECT 
+        lt.id, lt.doc_number, lt.doc_date, lt.source_location_id, lt.destination_location_id, 
+        lt.status, CAST(lt.notes AS VARCHAR(2000)) as notes, lt.transcode_id, lt.created_at, lt.updated_at,
+        l_src.code as source_location_code,
+        l_src.name as source_location_name,
+        w_src.description as source_warehouse_name,
+        l_dest.code as destination_location_code,
+        l_dest.name as destination_location_name,
+        w_dest.description as destination_warehouse_name
+      FROM LocationTransfers lt
+      LEFT JOIN Locations l_src ON lt.source_location_id = l_src.id
+      LEFT JOIN Locations l_dest ON lt.destination_location_id = l_dest.id
+      LEFT JOIN SubWarehouses sw_src ON l_src.sub_warehouse_id = sw_src.id
+      LEFT JOIN SubWarehouses sw_dest ON l_dest.sub_warehouse_id = sw_dest.id
+      LEFT JOIN Warehouses w_src ON sw_src.warehouse_id = w_src.id
+      LEFT JOIN Warehouses w_dest ON sw_dest.warehouse_id = w_dest.id
+      WHERE lt.id = ?
+    `, [id]);
+
+    if (transfer.length === 0) return res.status(404).json({ success: false, error: 'Transfer not found' });
+
+    const details = await executeQuery(`
+      SELECT 
+        ltd.id, ltd.transfer_id, ltd.item_id, ltd.quantity, CAST(ltd.notes AS VARCHAR(2000)) as notes,
+        i.code as item_code,
+        i.name as item_name,
+        COALESCE(u.name, i.unit, 'Unit') as unit_name
+      FROM LocationTransferDetails ltd
+      LEFT JOIN Items i ON ltd.item_id = i.id
+      LEFT JOIN Units u ON CAST(i.unit AS VARCHAR(50)) = CAST(u.id AS VARCHAR(50))
+      WHERE ltd.transfer_id = ?
+    `, [id]);
+
+    const transferData = { ...transfer[0] };
+    for (const key in transferData) {
+      if (typeof transferData[key] === 'bigint') transferData[key] = Number(transferData[key]);
+    }
+
+    const sanitizedDetails = details.map(d => {
+      const newD = { ...d };
+      for (const key in newD) {
+        if (typeof newD[key] === 'bigint') newD[key] = Number(newD[key]);
+      }
+      return newD;
+    });
+
+    res.json({ success: true, data: { ...transferData, items: sanitizedDetails } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create
+app.post('/api/location-transfers', async (req, res) => {
+  let connection;
+  try {
+    const { doc_date, source_location_id, destination_location_id, items, notes } = req.body;
+
+    // Validate Date
+    let validDate = doc_date;
+    if (!validDate || isNaN(new Date(validDate).getTime())) {
+      validDate = new Date().toISOString().split('T')[0];
+    }
+
+    // Generate Doc Number (TRF/YYMM/XXXX)
+    const dateObj = new Date(validDate);
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const year = dateObj.getFullYear();
+    const prefix = `TRF/${month}${year}/`;
+
+    // Get last number
+    const lastDoc = await executeQuery(`SELECT TOP 1 doc_number FROM LocationTransfers WHERE doc_number LIKE '${prefix}%' ORDER BY doc_number DESC`);
+
+    let nextNum = '0001';
+    if (lastDoc.length > 0) {
+      const lastSeq = parseInt(lastDoc[0].doc_number.split('/').pop());
+      nextNum = String(lastSeq + 1).padStart(4, '0');
+    }
+    const doc_number = `${prefix}${nextNum}`;
+
+    // Parse IDs
+    const srcLocId = parseInt(source_location_id) || 0;
+    const dstLocId = parseInt(destination_location_id) || 0;
+    // Escape notes for SQL (replace single quotes with two single quotes)
+    const safeNotes = (notes || '').replace(/'/g, "''");
+
+    // START TRANSACTION
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    // Insert Header - use SQL literal for notes (LONG VARCHAR) to avoid ODBC binding issues
+    await connection.query(`
+      INSERT INTO LocationTransfers (doc_number, doc_date, source_location_id, destination_location_id, notes, status)
+      VALUES (?, ?, ?, ?, '${safeNotes}', 'Draft')
+    `, [doc_number, validDate, srcLocId, dstLocId]);
+
+    const idRes = await connection.query('SELECT @@IDENTITY as id');
+    if (!idRes || idRes.length === 0 || !idRes[0].id) {
+      throw new Error('Failed to retrieve Transfer ID');
+    }
+    const transferId = Number(idRes[0].id);
+
+    // Insert Details - use SQL literal for notes (LONG VARCHAR) to avoid ODBC binding issues
+    for (const item of items) {
+      const itemNotes = (item.notes || '').replace(/'/g, "''");
+      await connection.query(`
+        INSERT INTO LocationTransferDetails (transfer_id, item_id, quantity, notes)
+        VALUES (?, ?, ?, '${itemNotes}')
+      `, [transferId, parseInt(item.item_id) || 0, parseFloat(item.quantity) || 0]);
+    }
+
+    await connection.commit();
+    res.json({ success: true, data: { id: transferId, doc_number } });
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); } catch (e) { }
+    }
+    console.error('Error creating transfer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) {
+      try { await connection.close(); } catch (e) { }
+    }
+  }
+});
+
+// Update (Draft only)
+app.put('/api/location-transfers/:id', async (req, res) => {
+  let connection;
+  try {
+    const { id } = req.params;
+    const { doc_date, source_location_id, destination_location_id, notes, items } = req.body;
+
+    if (!source_location_id || !destination_location_id || !items || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Misssing required fields' });
+    }
+
+    if (source_location_id === destination_location_id) {
+      return res.status(400).json({ success: false, error: 'Source and Destination cannot be the same' });
+    }
+
+    // Check status first
+    const existing = await executeQuery('SELECT status FROM LocationTransfers WHERE id = ?', [id]);
+    if (existing.length === 0) return res.status(404).json({ success: false, error: 'Transfer not found' });
+    if (existing[0].status !== 'Draft') return res.status(400).json({ success: false, error: 'Cannot edit non-draft transfer' });
+
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    const validDate = new Date(doc_date).toISOString().split('T')[0];
+    const srcLocId = Number(source_location_id);
+    const dstLocId = Number(destination_location_id);
+    const safeNotes = (notes || '').replace(/'/g, "''");
+
+    // Update Header
+    await connection.query(`
+      UPDATE LocationTransfers
+      SET doc_date = ?, source_location_id = ?, destination_location_id = ?, notes = '${safeNotes}', updated_at = CURRENT TIMESTAMP
+      WHERE id = ?
+    `, [validDate, srcLocId, dstLocId, id]);
+
+    // Delete Old Details
+    await connection.query('DELETE FROM LocationTransferDetails WHERE transfer_id = ?', [id]);
+
+    // Insert New Details
+    for (const item of items) {
+      const itemNotes = (item.notes || '').replace(/'/g, "''");
+      await connection.query(`
+        INSERT INTO LocationTransferDetails (transfer_id, item_id, quantity, notes)
+        VALUES (?, ?, ?, '${itemNotes}')
+      `, [id, parseInt(item.item_id) || 0, parseFloat(item.quantity) || 0]);
+    }
+
+    await connection.commit();
+    res.json({ success: true, message: 'Transfer updated' });
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); } catch (e) { }
+    }
+    console.error('Error updating transfer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) {
+      try { await connection.close(); } catch (e) { }
+    }
+  }
+});
+
+// Delete (Draft only)
+app.delete('/api/location-transfers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Check status
+    const transfer = await executeQuery('SELECT status FROM LocationTransfers WHERE id = ?', [id]);
+    if (transfer.length === 0) return res.status(404).json({ success: false, error: 'Transfer not found' });
+    if (transfer[0].status !== 'Draft') return res.status(400).json({ success: false, error: 'Cannot delete non-draft transfer' });
+
+    // Details deleted via CASCADE
+    await executeQuery('DELETE FROM LocationTransferDetails WHERE transfer_id = ?', [id]); // Explicit delete just in case
+    await executeQuery('DELETE FROM LocationTransfers WHERE id = ?', [id]);
+
+    res.json({ success: true, message: 'Transfer deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Approve/Post
+app.post('/api/location-transfers/:id/approve', async (req, res) => {
+  const { id } = req.params;
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    // 1. Get Transfer
+    const transfer = await connection.query(`
+      SELECT lt.*, l_src.name as source_location_name 
+      FROM LocationTransfers lt
+      JOIN Locations l_src ON lt.source_location_id = l_src.id
+      WHERE lt.id = ?
+    `, [id]);
+
+    if (transfer.length === 0) throw new Error('Transfer not found');
+    if (transfer[0].status !== 'Draft') throw new Error('Transfer not in Draft status');
+
+    const details = await connection.query(`
+        SELECT ltd.*, i.name as item_name 
+        FROM LocationTransferDetails ltd
+        JOIN Items i ON ltd.item_id = i.id
+        WHERE ltd.transfer_id = ?
+    `, [id]);
+
+    const srcLocId = transfer[0].source_location_id;
+    const dstLocId = transfer[0].destination_location_id;
+    const srcLocName = transfer[0].source_location_name;
+
+    // Get Warehouse IDs for Locations
+    const srcLoc = await connection.query(`SELECT sw.warehouse_id FROM Locations l JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id WHERE l.id = ?`, [srcLocId]);
+    const dstLoc = await connection.query(`SELECT sw.warehouse_id FROM Locations l JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id WHERE l.id = ?`, [dstLocId]);
+
+    const srcWhId = srcLoc[0]?.warehouse_id;
+    const dstWhId = dstLoc[0]?.warehouse_id;
+
+    if (!srcWhId || !dstWhId) {
+      throw new Error('Invalid Locations (Warehouse not found)');
+    }
+
+    // 2. Loop Items and Update Stock
+    for (const item of details) {
+      // Check Source Stock
+      const srcStock = await connection.query(`SELECT quantity, average_cost FROM ItemStocks WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.item_id, srcWhId, srcLocId]);
+      const currentQty = srcStock.length > 0 ? srcStock[0].quantity : 0;
+      const srcAvgCost = srcStock.length > 0 ? (srcStock[0].average_cost || 0) : 0;
+
+      if (currentQty < item.quantity) {
+        throw new Error(`Stok tidak cukup untuk item ${item.item_name} di Lokasi ${srcLocName}. Stok: ${currentQty}, Butuh: ${item.quantity}`);
+      }
+
+      // Decrease Source (Cost per unit remains same)
+      await connection.query(`UPDATE ItemStocks SET quantity = quantity - ?, last_updated = CURRENT TIMESTAMP WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.quantity, item.item_id, srcWhId, srcLocId]);
+
+      // Increase Destination with Weighted Average Cost Calculation
+      const dstStock = await connection.query(`SELECT quantity, average_cost FROM ItemStocks WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.item_id, dstWhId, dstLocId]);
+
+      let newDstAvgCost = srcAvgCost; // Default cost for new stock is the incoming cost
+
+      if (dstStock.length > 0) {
+        const dstQty = dstStock[0].quantity;
+        const dstCost = dstStock[0].average_cost || 0;
+
+        // Weighted Average: ((OldQty * OldCost) + (TransferQty * TransferCost)) / NewTotalQty
+        const totalQty = dstQty + item.quantity;
+
+        // Handle potential division by zero if totalQty is 0 (unlikely here as we are adding positive qty, but safety first)
+        if (totalQty > 0) {
+          const totalValue = (dstQty * dstCost) + (item.quantity * srcAvgCost);
+          newDstAvgCost = totalValue / totalQty;
+        } else {
+          newDstAvgCost = dstCost;
+        }
+      }
+
+      if (dstStock.length === 0) {
+        // Insert with new Avg Cost
+        await connection.query(`INSERT INTO ItemStocks (item_id, warehouse_id, location_id, quantity, average_cost) VALUES (?, ?, ?, 0, ?)`, [item.item_id, dstWhId, dstLocId, newDstAvgCost]);
+      }
+
+      // Update Qty and Average Cost
+      await connection.query(`UPDATE ItemStocks SET quantity = quantity + ?, average_cost = ?, last_updated = CURRENT TIMESTAMP WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.quantity, newDstAvgCost, item.item_id, dstWhId, dstLocId]);
+    }
+
+    // 3. Update Status
+    await connection.query(`UPDATE LocationTransfers SET status = 'Posted', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [id]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Transfer posted and stock updated' });
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); } catch (e) { }
+    }
+    console.error('Error posting transfer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) {
+      try { await connection.close(); } catch (e) { }
+    }
+  }
+});
+
+
+// Unpost/Cancel Post
+app.post('/api/location-transfers/:id/unpost', async (req, res) => {
+  const { id } = req.params;
+  let connection;
+  try {
+    connection = await odbc.connect(connectionString);
+    await connection.beginTransaction();
+
+    // 1. Get Transfer
+    const transfer = await connection.query(`
+      SELECT lt.*, l_dest.name as destination_location_name 
+      FROM LocationTransfers lt
+      JOIN Locations l_dest ON lt.destination_location_id = l_dest.id
+      WHERE lt.id = ?
+    `, [id]);
+
+    if (transfer.length === 0) throw new Error('Transfer not found');
+    if (transfer[0].status !== 'Posted') throw new Error('Transfer is not Posted');
+
+    const details = await connection.query(`
+        SELECT ltd.*, i.name as item_name 
+        FROM LocationTransferDetails ltd
+        JOIN Items i ON ltd.item_id = i.id
+        WHERE ltd.transfer_id = ?
+    `, [id]);
+
+    const srcLocId = transfer[0].source_location_id;
+    const dstLocId = transfer[0].destination_location_id;
+    const dstLocName = transfer[0].destination_location_name;
+
+    // Get Warehouse IDs
+    const srcLoc = await connection.query(`SELECT sw.warehouse_id FROM Locations l JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id WHERE l.id = ?`, [srcLocId]);
+    const dstLoc = await connection.query(`SELECT sw.warehouse_id FROM Locations l JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id WHERE l.id = ?`, [dstLocId]);
+
+    const srcWhId = srcLoc[0]?.warehouse_id;
+    const dstWhId = dstLoc[0]?.warehouse_id;
+
+    if (!srcWhId || !dstWhId) {
+      throw new Error('Invalid Locations (Warehouse not found)');
+    }
+
+    // 2. Loop Items and Revert Stock
+    for (const item of details) {
+      // Logic Unpost: Source (+), Destination (-)
+
+      // Check Destination Stock (Must have enough to return)
+      const dstStock = await connection.query(`SELECT quantity, average_cost FROM ItemStocks WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.item_id, dstWhId, dstLocId]);
+      const currentDstQty = dstStock.length > 0 ? dstStock[0].quantity : 0;
+
+      if (currentDstQty < item.quantity) {
+        throw new Error(`Stok tidak cukup di Lokasi Tujuan (${dstLocName}) untuk di-unpost. Stok saat ini: ${currentDstQty}, Harus dikembalikan: ${item.quantity}. Barang mungkin sudah dipindahkan atau terjual.`);
+      }
+
+      // Decrease Destination (Revert addition)
+      await connection.query(`UPDATE ItemStocks SET quantity = quantity - ?, last_updated = CURRENT TIMESTAMP WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.quantity, item.item_id, dstWhId, dstLocId]);
+
+      // Increase Source (Revert subtraction - with Weighted Average Cost update)
+      // Check if source stock record exists
+      const srcStock = await connection.query(`SELECT quantity, average_cost FROM ItemStocks WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.item_id, srcWhId, srcLocId]);
+      const dstAvgCost = dstStock.length > 0 ? (dstStock[0].average_cost || 0) : 0;
+
+      let newSrcAvgCost = dstAvgCost; // Default cost returning from destination
+
+      if (srcStock.length > 0) {
+        const srcQty = srcStock[0].quantity;
+        const srcCost = srcStock[0].average_cost || 0;
+
+        const totalQty = srcQty + item.quantity;
+
+        if (totalQty > 0) {
+          const totalValue = (srcQty * srcCost) + (item.quantity * dstAvgCost);
+          newSrcAvgCost = totalValue / totalQty;
+        } else {
+          newSrcAvgCost = srcCost;
+        }
+      }
+
+      if (srcStock.length === 0) {
+        // Insert if not exists
+        await connection.query(`INSERT INTO ItemStocks (item_id, warehouse_id, location_id, quantity, average_cost) VALUES (?, ?, ?, 0, ?)`, [item.item_id, srcWhId, srcLocId, newSrcAvgCost]);
+      }
+
+      // Update Qty and Average Cost at Source
+      await connection.query(`UPDATE ItemStocks SET quantity = quantity + ?, average_cost = ?, last_updated = CURRENT TIMESTAMP WHERE item_id = ? AND warehouse_id = ? AND location_id = ?`, [item.quantity, newSrcAvgCost, item.item_id, srcWhId, srcLocId]);
+    }
+
+    // 3. Update Status back to Draft
+    await connection.query(`UPDATE LocationTransfers SET status = 'Draft', updated_at = CURRENT TIMESTAMP WHERE id = ?`, [id]);
+
+    await connection.commit();
+    res.json({ success: true, message: 'Transfer unposted. Status reverted to Draft.' });
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); } catch (e) { }
+    }
+    console.error('Error unposting transfer:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) {
+      try { await connection.close(); } catch (e) { }
+    }
+  }
+});
+
+
+// ==========================================
+// STOCK REPORTS
+// ==========================================
+
+// Get Stock Summary Report (grouped by item)
+app.get('/api/reports/stock-summary', async (req, res) => {
+  try {
+    const { warehouse_id, category_id, search } = req.query;
+
+    let query = `
+      SELECT 
+        i.id as item_id,
+        i.code as item_code,
+        i.name as item_name,
+        COALESCE(u.name, i.unit, 'Unit') as unit_name,
+        COALESCE(i.standard_cost, 0) as standard_cost,
+        COALESCE(i.standard_price, 0) as standard_price,
+        COALESCE(SUM(s.quantity), 0) as total_quantity,
+        COALESCE(AVG(s.average_cost), i.standard_cost, 0) as average_cost,
+        COALESCE(SUM(s.quantity), 0) * COALESCE(AVG(s.average_cost), i.standard_cost, 0) as total_value
+      FROM Items i
+      LEFT JOIN ItemStocks s ON i.id = s.item_id
+      LEFT JOIN Units u ON i.unit = u.name OR CAST(i.unit AS VARCHAR(50)) = CAST(u.id AS VARCHAR(50))
+      WHERE 1=1
+    `;
+
+    const params = [];
+
+    if (warehouse_id) {
+      query += ' AND s.warehouse_id = ?';
+      params.push(warehouse_id);
+    }
+
+    if (search) {
+      query += " AND (i.code LIKE ? OR i.name LIKE ?)";
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    query += ` GROUP BY i.id, i.code, i.name, u.name, i.unit, i.standard_cost, i.standard_price
+               ORDER BY i.code`;
+
+    const result = await executeQuery(query, params);
+
+    const safeResult = result.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+
+    res.json({ success: true, data: safeResult });
+  } catch (error) {
+    console.error('Error fetching stock summary:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get Stock Detail by Warehouse
+app.get('/api/reports/stock-by-warehouse', async (req, res) => {
+  try {
+    const { search } = req.query;
+
+    let query = `
+      SELECT 
+        i.id as item_id,
+        i.code as item_code,
+        i.name as item_name,
+        COALESCE(u.name, i.unit, 'Unit') as unit_name,
+        w.id as warehouse_id,
+        w.code as warehouse_code,
+        w.description as warehouse_name,
+        COALESCE(s.quantity, 0) as quantity,
+        COALESCE(s.average_cost, i.standard_cost, 0) as average_cost,
+        COALESCE(s.quantity, 0) * COALESCE(s.average_cost, i.standard_cost, 0) as stock_value,
+        s.last_updated
+      FROM Items i
+      CROSS JOIN Warehouses w
+      LEFT JOIN ItemStocks s ON i.id = s.item_id AND w.id = s.warehouse_id
+      LEFT JOIN Units u ON i.unit = u.name OR CAST(i.unit AS VARCHAR(50)) = CAST(u.id AS VARCHAR(50))
+      WHERE w.active = 'Y'
+    `;
+
+    const params = [];
+
+    if (search) {
+      query += " AND (i.code LIKE ? OR i.name LIKE ?)";
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    query += ` ORDER BY i.code, w.code`;
+
+    const result = await executeQuery(query, params);
+
+    const safeResult = result.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+
+    res.json({ success: true, data: safeResult });
+  } catch (error) {
+    console.error('Error fetching stock by warehouse:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get Stock Detail by Location
+app.get('/api/reports/stock-by-location', async (req, res) => {
+  try {
+    const { warehouse_id, search } = req.query;
+
+    let query = `
+      SELECT 
+        i.id as item_id,
+        i.code as item_code,
+        i.name as item_name,
+        COALESCE(u.name, i.unit, 'Unit') as unit_name,
+        w.code as warehouse_code,
+        w.description as warehouse_name,
+        l.code as location_code,
+        l.name as location_name,
+        COALESCE(s.quantity, 0) as quantity,
+        COALESCE(s.average_cost, i.standard_cost, 0) as average_cost,
+        COALESCE(s.quantity, 0) * COALESCE(s.average_cost, i.standard_cost, 0) as stock_value
+      FROM ItemStocks s
+      JOIN Items i ON s.item_id = i.id
+      LEFT JOIN Warehouses w ON s.warehouse_id = w.id
+      LEFT JOIN Locations l ON s.location_id = l.id
+      LEFT JOIN Units u ON i.unit = u.name OR CAST(i.unit AS VARCHAR(50)) = CAST(u.id AS VARCHAR(50))
+      WHERE s.quantity <> 0
+    `;
+
+    const params = [];
+
+    if (warehouse_id) {
+      query += ' AND s.warehouse_id = ?';
+      params.push(warehouse_id);
+    }
+
+    if (search) {
+      query += " AND (i.code LIKE ? OR i.name LIKE ?)";
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    query += ` ORDER BY i.code, w.code, l.code`;
+
+    const result = await executeQuery(query, params);
+
+    const safeResult = result.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+
+    res.json({ success: true, data: safeResult });
+  } catch (error) {
+    console.error('Error fetching stock by location:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get Stock Card (transaction history for an item)
+app.get('/api/reports/stock-card/:itemId', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { warehouse_id, startDate, endDate } = req.query;
+
+    // Get item info
+    const [item] = await executeQuery('SELECT * FROM Items WHERE id = ?', [itemId]);
+    if (!item) {
+      return res.status(404).json({ success: false, error: 'Item not found' });
+    }
+
+    // Get current stock
+    let stockQuery = `
+      SELECT 
+        s.warehouse_id,
+        w.code as warehouse_code,
+        w.description as warehouse_name,
+        s.quantity,
+        s.average_cost,
+        s.last_updated
+      FROM ItemStocks s
+      LEFT JOIN Warehouses w ON s.warehouse_id = w.id
+      WHERE s.item_id = ?
+    `;
+    const stockParams = [itemId];
+
+    if (warehouse_id) {
+      stockQuery += ' AND s.warehouse_id = ?';
+      stockParams.push(warehouse_id);
+    }
+
+    const currentStock = await executeQuery(stockQuery, stockParams);
+
+    // Get transaction history from receivings
+    let transQuery = `
+      SELECT 
+        'RECEIVING' as trans_type,
+        r.doc_number,
+        r.doc_date as trans_date,
+        rd.quantity as qty_in,
+        0 as qty_out,
+        rd.unit_price as unit_cost,
+        w.code as warehouse_code,
+        p.name as partner_name
+      FROM ReceivingDetails rd
+      JOIN Receivings r ON rd.receiving_id = r.id
+      LEFT JOIN Warehouses w ON r.warehouse_id = w.id
+      LEFT JOIN Partners p ON r.partner_id = p.id
+      WHERE rd.item_id = ? AND r.status = 'Posted'
+    `;
+    const transParams = [itemId];
+
+    if (warehouse_id) {
+      transQuery += ' AND r.warehouse_id = ?';
+      transParams.push(warehouse_id);
+    }
+
+    if (startDate && endDate) {
+      transQuery += ' AND r.doc_date BETWEEN ? AND ?';
+      transParams.push(startDate, endDate);
+    }
+
+    transQuery += ' ORDER BY r.doc_date DESC, r.doc_number DESC';
+
+    const transactions = await executeQuery(transQuery, transParams);
+
+    const safeStock = currentStock.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+
+    const safeTrans = transactions.map(r => {
+      const newR = { ...r };
+      for (const key in newR) {
+        if (typeof newR[key] === 'bigint') newR[key] = Number(newR[key]);
+      }
+      return newR;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        item: item,
+        currentStock: safeStock,
+        transactions: safeTrans
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching stock card:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 
 // Start server
 app.listen(PORT, async () => {

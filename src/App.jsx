@@ -21,6 +21,7 @@ import ReceivingList from './pages/transaction/ReceivingList';
 import ShipmentList from './pages/transaction/ShipmentList';
 import APInvoiceList from './pages/transaction/APInvoiceList';
 import ARInvoiceList from './pages/transaction/ARInvoiceList';
+import LocationTransferList from './pages/transaction/LocationTransferList';
 import AccountingPeriodList from './pages/settings/AccountingPeriodList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
@@ -34,6 +35,7 @@ import APAgingReport from './pages/report/APAgingReport';
 import ARAgingReport from './pages/report/ARAgingReport';
 import SalesReport from './pages/report/SalesReport';
 import PurchaseReport from './pages/report/PurchaseReport';
+import StockReport from './pages/report/StockReport';
 import TrialBalanceReport from './pages/report/TrialBalanceReport';
 import ProfitLossReport from './pages/report/ProfitLossReport';
 import BalanceSheetReport from './pages/report/BalanceSheetReport';
@@ -81,6 +83,8 @@ function App() {
                 return <WarehouseList />;
             case 'sub-warehouse':
                 return <SubWarehouseList />;
+            case 'location':
+                return <LocationList />;
             case 'accounting-period': // Added case for AccountingPeriodList
                 return <AccountingPeriodList />;
             case 'purchase-order': // This case already exists, but the instruction implies adding it again. Keeping the existing one.
@@ -115,6 +119,8 @@ function App() {
                 return <APInvoiceList />;
             case 'ar-invoice':
                 return <ARInvoiceList />;
+            case 'location-transfer':
+                return <LocationTransferList />;
             case 'sales-order':
                 return <SalesOrderList />;
             case 'menu-settings':
@@ -125,6 +131,8 @@ function App() {
                 return <SalesReport />;
             case 'report/purchase-summary':
                 return <PurchaseReport />;
+            case 'report/stock-summary':
+                return <StockReport />;
             case 'report/trial-balance':
                 return <TrialBalanceReport />;
             case 'report/profit-loss':

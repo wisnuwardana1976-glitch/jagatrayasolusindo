@@ -154,16 +154,17 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                 setFormData({
                     doc_number: adj.doc_number,
                     doc_date: new Date(adj.doc_date).toISOString().split('T')[0],
-                    adjustment_type: adj.adjustment_type,
+                    adjustment_type: adj.adjustment_type || adj.type,
                     transcode_id: adj.transcode_id || '',
                     partner_id: adj.partner_id || '',
                     counter_account_id: adj.counter_account_id || '',
-                    amount: parseFloat(adj.amount),
-                    notes: adj.notes || '',
+                    amount: parseFloat(adj.total_amount || adj.amount || 0),
+                    notes: adj.description || adj.notes || '',
                     status: adj.status,
                     allocate_to_invoice: adj.allocate_to_invoice || 'N',
                     allocations: adj.allocations || []
                 });
+
                 if (adj.partner_id) {
                     fetchInvoices(adj.partner_id);
                 }
@@ -450,7 +451,7 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                                                 <tr>
                                                     <th>No. Invoice</th>
                                                     <th>Tanggal</th>
-                                                    <th>Total Invoice</th>
+                                                    <th>Outstanding</th>
                                                     <th style={{ width: '150px' }}>Alokasi</th>
                                                 </tr>
                                             </thead>
@@ -458,7 +459,7 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                                                 {invoices.length === 0 ? (
                                                     <tr>
                                                         <td colSpan="4" style={{ textAlign: 'center', padding: '1rem', color: '#888' }}>
-                                                            Tidak ada invoice untuk customer ini.
+                                                            Tidak ada invoice outstanding untuk customer ini.
                                                         </td>
                                                     </tr>
                                                 ) : (
@@ -468,7 +469,8 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                                                             <tr key={inv.id}>
                                                                 <td>{inv.doc_number}</td>
                                                                 <td>{formatDate(inv.doc_date)}</td>
-                                                                <td>{formatMoney(inv.total_amount || 0)}</td>
+                                                                <td>{formatMoney(inv.outstanding_amount || inv.total_amount || 0)}</td>
+
                                                                 <td>
                                                                     <input
                                                                         type="number"
@@ -546,7 +548,7 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                                         <td>{formatDate(adj.doc_date)}</td>
                                         <td><strong>{adj.doc_number}</strong></td>
                                         <td>{adj.partner_name || '-'}</td>
-                                        <td>{formatMoney(adj.amount)}</td>
+                                        <td>{formatMoney(adj.total_amount || adj.amount || 0)}</td>
                                         <td>{adj.counter_account_name || '-'}</td>
                                         <td>
                                             <span className={`badge ${getStatusBadge(adj.status)}`}>

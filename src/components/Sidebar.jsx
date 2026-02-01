@@ -32,6 +32,7 @@ const menuItems = [
             { id: 'warehouse', label: 'Warehouse', icon: 'home' },
             { id: 'sub-warehouse', label: 'Sub Warehouse', icon: 'box' },
             { id: 'location', label: 'Location', icon: 'map' },
+            { id: 'location-transfer', label: 'Pindah Gudang', icon: 'send' },
             { id: 'recalculate-inventory', label: 'Recalculate Stock', icon: 'rotate-cw' },
         ],
     },
@@ -58,6 +59,7 @@ const menuItems = [
         items: [
             { id: 'report/sales-summary', label: 'Laporan Penjualan', icon: 'file-text' },
             { id: 'report/purchase-summary', label: 'Laporan Pembelian', icon: 'file-text' },
+            { id: 'report/stock-summary', label: 'Laporan Stok', icon: 'list' },
             { id: 'report/trial-balance', label: 'Neraca Saldo', icon: 'book-open' },
             { id: 'report/profit-loss', label: 'Laba Rugi', icon: 'dollar-sign' },
             { id: 'report/balance-sheet', label: 'Neraca', icon: 'building' },
