@@ -25,6 +25,7 @@ import LocationTransferList from './pages/transaction/LocationTransferList';
 import AccountingPeriodList from './pages/settings/AccountingPeriodList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
+import YearSetupList from './pages/master/YearSetupList';
 import POOutstandingReport from './pages/report/POOutstandingReport';
 import SOOutstandingReport from './pages/report/SOOutstandingReport';
 import ReceivingOutstandingReport from './pages/report/ReceivingOutstandingReport';
@@ -54,9 +55,21 @@ import './index.css';
 
 import { PeriodProvider } from './context/PeriodContext';
 
-function App() {
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import Login from './pages/auth/Login';
+import UserList from './pages/settings/UserList';
+import RoleList from './pages/settings/RoleList';
+import ProtectedRoute from './components/ProtectedRoute';
+import { AuthProvider } from './context/AuthContext';
+
+
+// ... import all other pages (keep existing imports) ...
+
+function AppContent() {
     const [currentPage, setCurrentPage] = useState('dashboard');
     const [connectionStatus, setConnectionStatus] = useState('checking');
+    const navigate = useNavigate();
+    const location = useLocation();
 
     useEffect(() => {
         checkConnection();
@@ -72,10 +85,18 @@ function App() {
         }
     };
 
+    // Helper to render page based on currentPage state (for legacy Sidebar support)
+    // We will gradually move to real routes, but for now we keep the currentPage logic 
+    // inside the ProtectedRoute for the main dashboard layout.
     const renderPage = () => {
         switch (currentPage) {
             case 'dashboard':
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
+            case 'users':
+                return <UserList />;
+            case 'roles':
+                return <RoleList />;
+            // ... all other existing cases ...
             case 'entity':
                 return <EntityList />;
             case 'site':
@@ -86,10 +107,8 @@ function App() {
                 return <SubWarehouseList />;
             case 'location':
                 return <LocationList />;
-            case 'accounting-period': // Added case for AccountingPeriodList
+            case 'accounting-period':
                 return <AccountingPeriodList />;
-            case 'purchase-order': // This case already exists, but the instruction implies adding it again. Keeping the existing one.
-                return <PurchaseOrderList />;
             case 'item':
                 return <ItemList />;
             case 'unit':
@@ -126,6 +145,8 @@ function App() {
                 return <SalesOrderList />;
             case 'menu-settings':
                 return <MenuSettings />;
+            case 'year-setup':
+                return <YearSetupList />;
             case 'payment-term':
                 return <PaymentTermList />;
             case 'report/sales-summary':
@@ -202,6 +223,19 @@ function App() {
                 </main>
             </div>
         </PeriodProvider>
+    );
+}
+
+function App() {
+    return (
+        <AuthProvider>
+            <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route element={<ProtectedRoute />}>
+                    <Route path="/*" element={<AppContent />} />
+                </Route>
+            </Routes>
+        </AuthProvider>
     );
 }
 

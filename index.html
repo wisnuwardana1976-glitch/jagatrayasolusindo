@@ -1,13 +1,37 @@
 <!DOCTYPE html>
 <html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Jagatraya ERP</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jagatraya ERP</title>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script>
+    window.addEventListener('error', function (event) {
+      var errorDisplay = document.getElementById('error-display');
+      if (!errorDisplay) {
+        errorDisplay = document.createElement('div');
+        errorDisplay.id = 'error-display';
+        errorDisplay.style.position = 'fixed';
+        errorDisplay.style.top = '0';
+        errorDisplay.style.left = '0';
+        errorDisplay.style.width = '100%';
+        errorDisplay.style.backgroundColor = '#cc0000';
+        errorDisplay.style.color = 'white';
+        errorDisplay.style.padding = '20px';
+        errorDisplay.style.zIndex = '9999';
+        errorDisplay.style.fontFamily = 'monospace';
+        errorDisplay.style.whiteSpace = 'pre-wrap';
+        document.body.appendChild(errorDisplay);
+      }
+      errorDisplay.innerText += 'Global Error: ' + event.message + '\nat ' + event.filename + ':' + event.lineno + '\n\n';
+    });
+  </script>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
 </html>

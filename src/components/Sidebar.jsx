@@ -1,4 +1,4 @@
-const menuItems = [
+export const menuItems = [
     {
         section: 'Menu Utama',
         items: [
@@ -24,6 +24,7 @@ const menuItems = [
             { id: 'coa-segment', label: 'COA Segment', icon: 'hash' },
             { id: 'salesperson', label: 'Sales Person', icon: 'user' },
             { id: 'payment-term', label: 'Term of Payment', icon: 'credit-card' },
+            { id: 'year-setup', label: 'Master Tahun', icon: 'calendar' },
         ],
     },
     {
@@ -293,10 +294,21 @@ const icons = {
 
 import { useState, useEffect } from 'react';
 import { usePeriod } from '../context/PeriodContext';
+import { useAuth } from '../context/AuthContext';
 
 function Sidebar({ currentPage, setCurrentPage }) {
     const [activeMenuConfig, setActiveMenuConfig] = useState(null);
     const { selectedPeriod, setSelectedPeriod, periods } = usePeriod();
+    const { user, logout, hasPermission } = useAuth();
+
+    // Initialize expanded sections state
+    const [expandedSections, setExpandedSections] = useState(() => {
+        // Default: expand all sections initially
+        const initial = {};
+        menuItems.forEach(s => { initial[s.section] = true; });
+        initial['Pengaturan'] = true; // Ensure Settings is expanded
+        return initial;
+    });
 
     useEffect(() => {
         loadMenuConfig();
@@ -313,22 +325,29 @@ function Sidebar({ currentPage, setCurrentPage }) {
         }
     };
 
-    // Use saved config or default menuItems
+    // Filter menu items based on permissions
     const getDisplayMenu = () => {
-        if (!activeMenuConfig) {
-            return menuItems;
+        // Use default menuItems
+        let displayItems = menuItems;
+
+        // If config exists, apply it (filtering/sorting)
+        if (activeMenuConfig) {
+            displayItems = activeMenuConfig
+                .filter(section => section.visible)
+                .sort((a, b) => a.order - b.order)
+                .map(section => ({
+                    section: section.section,
+                    items: section.items
+                        .filter(item => item.visible)
+                        .sort((a, b) => a.order - b.order)
+                }));
         }
 
-        // Filter and sort based on saved config
-        return activeMenuConfig
-            .filter(section => section.visible)
-            .sort((a, b) => a.order - b.order)
-            .map(section => ({
-                section: section.section,
-                items: section.items
-                    .filter(item => item.visible)
-                    .sort((a, b) => a.order - b.order)
-            }));
+        // Apply Permission Filter
+        return displayItems.map(section => ({
+            ...section,
+            items: section.items.filter(item => hasPermission(item.id, 'view'))
+        })).filter(section => section.items.length > 0);
     };
 
     const displayMenu = getDisplayMenu();
@@ -341,24 +360,22 @@ function Sidebar({ currentPage, setCurrentPage }) {
         }));
     };
 
-    // Check if section has active item
-    const hasActiveItem = (section) => {
-        return section.items.some(item => item.id === currentPage);
+    const handleLogout = () => {
+        if (confirm('Yakin ingin logout?')) {
+            logout();
+        }
     };
-
-    // Initialize expanded sections state
-    const [expandedSections, setExpandedSections] = useState(() => {
-        // Default: expand all sections initially
-        const initial = {};
-        menuItems.forEach(s => { initial[s.section] = true; });
-        return initial;
-    });
 
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
                 <h1>JAGATRAYA</h1>
                 <p>Enterprise Resource Planning</p>
+                {user && (
+                    <div style={{ fontSize: '0.8rem', color: '#a0aec0', marginTop: '0.5rem' }}>
+                        Login sebagai: <strong style={{ color: 'white' }}>{user.full_name || user.username}</strong>
+                    </div>
+                )}
             </div>
 
             <div className="period-selector" style={{ padding: '0 1rem 1rem 1rem', borderBottom: '1px solid #48546b', marginBottom: '1rem' }}>
@@ -388,18 +405,46 @@ function Sidebar({ currentPage, setCurrentPage }) {
                         </option>
                     ))}
                 </select>
-                {selectedPeriod && (
-                    <div style={{ fontSize: '0.7rem', color: '#718096', marginTop: '4px' }}>
-                        Filter: {new Date(selectedPeriod.start_date).toLocaleDateString()} - {new Date(selectedPeriod.end_date).toLocaleDateString()}
-                    </div>
-                )}
             </div>
 
-            {displayMenu.map((section) => (
-                <div key={section.section} className="nav-section">
+            <div className="sidebar-menu-content" style={{ flex: 1, overflowY: 'auto' }}>
+                {displayMenu.map((section) => (
+                    <div key={section.section} className="nav-section">
+                        <div
+                            className="nav-section-title"
+                            onClick={() => toggleSection(section.section)}
+                            style={{
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                userSelect: 'none'
+                            }}
+                        >
+                            <span>{section.section}</span>
+                            <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                                {expandedSections[section.section] ? '▼' : '▶'}
+                            </span>
+                        </div>
+                        {expandedSections[section.section] && section.items.map((item) => (
+                            <div
+                                key={item.id}
+                                className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
+                                onClick={() => setCurrentPage(item.id)}
+                            >
+                                {icons[item.icon]}
+                                <span>{item.label}</span>
+                            </div>
+                        ))}
+                    </div>
+                ))}
+
+                {/* Settings Section - Conditional based on role (or check specific permission) */}
+                {/* Assuming all logged in users can see settings, but specific items inside might be restricted */}
+                <div className="nav-section">
                     <div
                         className="nav-section-title"
-                        onClick={() => toggleSection(section.section)}
+                        onClick={() => toggleSection('Pengaturan')}
                         style={{
                             cursor: 'pointer',
                             display: 'flex',
@@ -408,67 +453,61 @@ function Sidebar({ currentPage, setCurrentPage }) {
                             userSelect: 'none'
                         }}
                     >
-                        <span>{section.section}</span>
+                        <span>Pengaturan</span>
                         <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
-                            {expandedSections[section.section] ? '▼' : '▶'}
+                            {expandedSections['Pengaturan'] ? '▼' : '▶'}
                         </span>
                     </div>
-                    {expandedSections[section.section] && section.items.map((item) => (
-                        <div
-                            key={item.id}
-                            className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
-                            onClick={() => setCurrentPage(item.id)}
-                        >
-                            {icons[item.icon]}
-                            <span>{item.label}</span>
-                        </div>
-                    ))}
+                    {expandedSections['Pengaturan'] !== false && (
+                        <>
+                            {hasPermission('users', 'view') && (
+                                <div className={`nav-item ${currentPage === 'users' ? 'active' : ''}`} onClick={() => setCurrentPage('users')}>
+                                    {icons['users']} <span>Manajemen User</span>
+                                </div>
+                            )}
+                            {hasPermission('roles', 'view') && (
+                                <div className={`nav-item ${currentPage === 'roles' ? 'active' : ''}`} onClick={() => setCurrentPage('roles')}>
+                                    {icons['settings']} <span>Manajemen Role</span>
+                                </div>
+                            )}
+                            <div className={`nav-item ${currentPage === 'menu-settings' ? 'active' : ''}`} onClick={() => setCurrentPage('menu-settings')}>
+                                {icons['settings']} <span>Pengaturan Menu</span>
+                            </div>
+                            <div className={`nav-item ${currentPage === 'accounting-period' ? 'active' : ''}`} onClick={() => setCurrentPage('accounting-period')}>
+                                {icons['calendar']} <span>Periode Akuntansi</span>
+                            </div>
+                            <div className={`nav-item ${currentPage === 'gl-settings' ? 'active' : ''}`} onClick={() => setCurrentPage('gl-settings')}>
+                                {icons['settings']} <span>GL Settings</span>
+                            </div>
+                        </>
+                    )}
                 </div>
-            ))}
+            </div>
 
-            {/* Settings Section - Always visible */}
-            <div className="nav-section">
-                <div
-                    className="nav-section-title"
-                    onClick={() => toggleSection('Pengaturan')}
+            <div className="sidebar-footer" style={{ padding: '1rem', borderTop: '1px solid #48546b' }}>
+                <button
+                    onClick={handleLogout}
                     style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        backgroundColor: '#e53e3e',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
-                        userSelect: 'none'
+                        justifyContent: 'center',
+                        gap: '0.5rem'
                     }}
                 >
-                    <span>Pengaturan</span>
-                    <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
-                        {expandedSections['Pengaturan'] ? '▼' : '▶'}
-                    </span>
-                </div>
-                {expandedSections['Pengaturan'] !== false && (
-                    <>
-                        <div
-                            className={`nav-item ${currentPage === 'menu-settings' ? 'active' : ''}`}
-                            onClick={() => setCurrentPage('menu-settings')}
-                        >
-                            {icons['settings']}
-                            <span>Pengaturan Menu</span>
-                        </div>
-                        <div
-                            className={`nav-item ${currentPage === 'accounting-period' ? 'active' : ''}`}
-                            onClick={() => setCurrentPage('accounting-period')}
-                        >
-                            {icons['calendar']}
-                            <span>Periode Akuntansi</span>
-                        </div>
-                        <div
-                            className={`nav-item ${currentPage === 'gl-settings' ? 'active' : ''}`}
-                            onClick={() => setCurrentPage('gl-settings')}
-                        >
-                            {icons['settings']}
-                            <span>GL Settings</span>
-                        </div>
-                    </>
-                )}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                        <polyline points="16 17 21 12 16 7"></polyline>
+                        <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                    Logout
+                </button>
             </div>
         </aside>
     );

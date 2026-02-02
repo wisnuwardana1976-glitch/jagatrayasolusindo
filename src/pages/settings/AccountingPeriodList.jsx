@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 
 const AccountingPeriodList = () => {
     const [periods, setPeriods] = useState([]);
+    const [years, setYears] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [formData, setFormData] = useState({
@@ -11,14 +12,29 @@ const AccountingPeriodList = () => {
         end_date: '',
         status: 'Open',
         active: 'Y',
-        is_starting: 'N'
+        is_starting: 'N',
+        yearid: '',
+        monthid: ''
     });
     const [isEditing, setIsEditing] = useState(false);
     const [editId, setEditId] = useState(null);
 
     useEffect(() => {
         fetchPeriods();
+        fetchYears();
     }, []);
+
+    const fetchYears = async () => {
+        try {
+            const response = await fetch('/api/year-setup');
+            const data = await response.json();
+            if (data.success) {
+                setYears(data.data);
+            }
+        } catch (error) {
+            console.error('Error fetching years:', error);
+        }
+    };
 
     const fetchPeriods = async () => {
         setLoading(true);
@@ -98,7 +114,9 @@ const AccountingPeriodList = () => {
             end_date: formatDate(period.end_date),
             status: period.status,
             active: period.active,
-            is_starting: period.is_starting || 'N'
+            is_starting: period.is_starting || 'N',
+            yearid: period.yearid || '',
+            monthid: period.monthid || ''
         });
         setIsEditing(true);
         setEditId(period.id);
@@ -113,7 +131,9 @@ const AccountingPeriodList = () => {
             end_date: '',
             status: 'Open',
             active: 'Y',
-            is_starting: 'N'
+            is_starting: 'N',
+            yearid: '',
+            monthid: ''
         });
         setIsEditing(false);
         setEditId(null);
@@ -235,6 +255,34 @@ const AccountingPeriodList = () => {
                                         required
                                         placeholder="Contoh: Januari 2026"
                                     />
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                    <div className="form-group">
+                                        <label>Tahun</label>
+                                        <select
+                                            value={formData.yearid}
+                                            onChange={(e) => setFormData({ ...formData, yearid: parseInt(e.target.value) || '' })}
+                                            required
+                                        >
+                                            <option value="">-- Pilih Tahun --</option>
+                                            {years.map((y) => (
+                                                <option key={y.id} value={y.yearid}>{y.yearid}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Bulan</label>
+                                        <select
+                                            value={formData.monthid}
+                                            onChange={(e) => setFormData({ ...formData, monthid: parseInt(e.target.value) || '' })}
+                                            required
+                                        >
+                                            <option value="">-- Pilih Bulan --</option>
+                                            {[...Array(12)].map((_, i) => (
+                                                <option key={i + 1} value={i + 1}>{i + 1}</option>
+                                            ))}
+                                        </select>
+                                    </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                     <div className="form-group">

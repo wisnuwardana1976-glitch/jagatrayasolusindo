@@ -7,7 +7,12 @@ import path from 'path';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import PDFDocument from 'pdfkit';
+
 import * as XLSX from 'xlsx';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'jagatraya-super-secret-key-change-this';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +26,8 @@ const logDebug = (msg) => {
 
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
+const connectionString = `Driver={SQL Anywhere 17};Host=${process.env.DB_HOST}:${process.env.DB_PORT};DatabaseName=${process.env.DB_NAME};UID=${process.env.DB_USER};PWD=${process.env.DB_PASSWORD}`;
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -28,8 +35,247 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Connection String
-const connectionString = `Driver={SQL Anywhere 17};Host=${process.env.DB_HOST}:${process.env.DB_PORT};DatabaseName=${process.env.DB_NAME};UID=${process.env.DB_USER};PWD=${process.env.DB_PASSWORD}`;
+// Authentication Middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+// ==================== AUTHENTICATION ====================
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    const users = await executeQuery('SELECT * FROM Users WHERE username = ? AND active = \'Y\'', [username]);
+    if (users.length === 0) {
+      return res.status(401).json({ success: false, error: 'Invalid username or password' });
+    }
+
+    const user = users[0];
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!validPassword) {
+      return res.status(401).json({ success: false, error: 'Invalid username or password' });
+    }
+
+    // Get Role & Permissions
+    let role = null;
+    let permissions = [];
+
+    if (user.role_id) {
+      const roles = await executeQuery('SELECT * FROM Roles WHERE id = ?', [user.role_id]);
+      if (roles.length > 0) role = roles[0];
+
+      permissions = await executeQuery('SELECT * FROM RolePermissions WHERE role_id = ?', [user.role_id]);
+    }
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role_id: user.role_id },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        full_name: user.full_name,
+        role: role ? role.name : null,
+        permissions
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  try {
+    const users = await executeQuery('SELECT id, username, full_name, role_id FROM Users WHERE id = ?', [req.user.id]);
+    if (users.length === 0) return res.sendStatus(404);
+
+    const user = users[0];
+
+    let role = null;
+    let permissions = [];
+
+    if (user.role_id) {
+      const roles = await executeQuery('SELECT * FROM Roles WHERE id = ?', [user.role_id]);
+      if (roles.length > 0) role = roles[0];
+
+      permissions = await executeQuery('SELECT * FROM RolePermissions WHERE role_id = ?', [user.role_id]);
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        full_name: user.full_name,
+        role: role ? role.name : null,
+        permissions
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== USER MANAGEMENT ====================
+app.get('/api/users', authenticateToken, async (req, res) => {
+  try {
+    const users = await executeQuery(`
+            SELECT u.id, u.username, u.full_name, u.role_id, u.active, r.name as role_name 
+            FROM Users u 
+            LEFT JOIN Roles r ON u.role_id = r.id 
+            ORDER BY u.username
+        `);
+    res.json({ success: true, data: users });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/users', authenticateToken, async (req, res) => {
+  try {
+    const { username, password, full_name, role_id } = req.body;
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    await executeQuery(
+      'INSERT INTO Users (username, password_hash, full_name, role_id, active) VALUES (?, ?, ?, ?, ?)',
+      [username, hashedPassword, full_name, role_id, 'Y']
+    );
+    res.json({ success: true, message: 'User berhasil dibuat' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const { username, full_name, role_id, active, password } = req.body;
+
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+      await executeQuery(
+        'UPDATE Users SET username = ?, full_name = ?, role_id = ?, active = ?, password_hash = ? WHERE id = ?',
+        [username, full_name, role_id, active, hashedPassword, req.params.id]
+      );
+    } else {
+      await executeQuery(
+        'UPDATE Users SET username = ?, full_name = ?, role_id = ?, active = ? WHERE id = ?',
+        [username, full_name, role_id, active, req.params.id]
+      );
+    }
+    res.json({ success: true, message: 'User berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM Users WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'User berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== ROLE MANAGEMENT ====================
+app.get('/api/roles', authenticateToken, async (req, res) => {
+  try {
+    const roles = await executeQuery('SELECT * FROM Roles ORDER BY name');
+    res.json({ success: true, data: roles });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/roles/:id', authenticateToken, async (req, res) => {
+  try {
+    const roles = await executeQuery('SELECT * FROM Roles WHERE id = ?', [req.params.id]);
+    if (roles.length === 0) return res.status(404).json({ success: false, error: 'Role not found' });
+
+    const permissions = await executeQuery('SELECT * FROM RolePermissions WHERE role_id = ?', [req.params.id]);
+
+    res.json({ success: true, data: { ...roles[0], permissions } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/roles', authenticateToken, async (req, res) => {
+  try {
+    const { name, description, permissions } = req.body;
+
+    await executeQuery('INSERT INTO Roles (name, description) VALUES (?, ?)', [name, description]);
+
+    const roleResult = await executeQuery('SELECT id FROM Roles WHERE name = ?', [name]);
+    const roleId = roleResult[0].id;
+
+    // Add Permissions
+    if (permissions && permissions.length > 0) {
+      for (const p of permissions) {
+        await executeQuery(
+          'INSERT INTO RolePermissions (role_id, feature_key, can_view, can_create, can_edit, can_delete, can_print) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [roleId, p.feature_key, p.can_view || 'N', p.can_create || 'N', p.can_edit || 'N', p.can_delete || 'N', p.can_print || 'N']
+        );
+      }
+    }
+    res.json({ success: true, message: 'Role berhasil dibuat' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/roles/:id', authenticateToken, async (req, res) => {
+  try {
+    const { name, description, permissions } = req.body;
+
+    await executeQuery('UPDATE Roles SET name = ?, description = ? WHERE id = ?', [name, description, req.params.id]);
+
+    // Update Permissions (Delete all and re-insert for simplicity)
+    await executeQuery('DELETE FROM RolePermissions WHERE role_id = ?', [req.params.id]);
+
+    if (permissions && permissions.length > 0) {
+      for (const p of permissions) {
+        await executeQuery(
+          'INSERT INTO RolePermissions (role_id, feature_key, can_view, can_create, can_edit, can_delete, can_print) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, p.feature_key, p.can_view || 'N', p.can_create || 'N', p.can_edit || 'N', p.can_delete || 'N', p.can_print || 'N']
+        );
+      }
+    }
+    res.json({ success: true, message: 'Role berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/roles/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM RolePermissions WHERE role_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM Roles WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Role berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 let dbPool = null;
 let isConnected = false;
@@ -87,7 +333,7 @@ app.get('/api/accounting-periods', async (req, res) => {
 
 app.post('/api/accounting-periods', async (req, res) => {
   try {
-    const { code, name, start_date, end_date, status, active, is_starting } = req.body;
+    const { code, name, start_date, end_date, status, active, is_starting, yearid, monthid } = req.body;
 
     // If this is a starting period, clear any existing starting periods
     if (is_starting === 'Y') {
@@ -95,8 +341,8 @@ app.post('/api/accounting-periods', async (req, res) => {
     }
 
     await executeQuery(
-      'INSERT INTO AccountingPeriods (code, name, start_date, end_date, status, active, is_starting) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [code, name, start_date, end_date, status || 'Open', active || 'Y', is_starting || 'N']
+      'INSERT INTO AccountingPeriods (code, name, start_date, end_date, status, active, is_starting, yearid, monthid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [code, name, start_date, end_date, status || 'Open', active || 'Y', is_starting || 'N', yearid || null, monthid || null]
     );
     res.json({ success: true, message: 'Accounting Period berhasil ditambahkan' });
   } catch (error) {
@@ -107,7 +353,7 @@ app.post('/api/accounting-periods', async (req, res) => {
 
 app.put('/api/accounting-periods/:id', async (req, res) => {
   try {
-    const { code, name, start_date, end_date, status, active, is_starting } = req.body;
+    const { code, name, start_date, end_date, status, active, is_starting, yearid, monthid } = req.body;
 
     // If this is a starting period, clear any existing starting periods
     if (is_starting === 'Y') {
@@ -115,8 +361,8 @@ app.put('/api/accounting-periods/:id', async (req, res) => {
     }
 
     await executeQuery(
-      'UPDATE AccountingPeriods SET code = ?, name = ?, start_date = ?, end_date = ?, status = ?, active = ?, is_starting = ? WHERE id = ?',
-      [code, name, start_date, end_date, status, active, is_starting || 'N', req.params.id]
+      'UPDATE AccountingPeriods SET code = ?, name = ?, start_date = ?, end_date = ?, status = ?, active = ?, is_starting = ?, yearid = ?, monthid = ? WHERE id = ?',
+      [code, name, start_date, end_date, status, active, is_starting || 'N', yearid || null, monthid || null, req.params.id]
     );
     res.json({ success: true, message: 'Accounting Period berhasil diupdate' });
   } catch (error) {
@@ -276,6 +522,47 @@ app.delete('/api/payment-terms/:id', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// ==================== YEAR SETUP (MASTER TAHUN) ====================
+app.get('/api/year-setup', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM YearSetups ORDER BY yearid DESC');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/year-setup', async (req, res) => {
+  try {
+    const { yearid } = req.body;
+
+    // Check if year already exists
+    const existing = await executeQuery('SELECT * FROM YearSetups WHERE yearid = ?', [yearid]);
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, error: 'Tahun sudah ada' });
+    }
+
+    await executeQuery(
+      'INSERT INTO YearSetups (yearid) VALUES (?)',
+      [yearid]
+    );
+    const result = await executeQuery('SELECT * FROM YearSetups WHERE yearid = ?', [yearid]);
+    res.json({ success: true, data: result[0], message: 'Tahun berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/year-setup/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM YearSetups WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Tahun berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 
 // ==================== TRANSACTIONS (MASTER TRANSAKSI) ====================
 app.get('/api/transactions', async (req, res) => {
