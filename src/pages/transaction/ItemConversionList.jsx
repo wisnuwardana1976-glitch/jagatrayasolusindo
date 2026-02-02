@@ -296,7 +296,6 @@ function ItemConversionList() {
             doc_number: 'AUTO',
             doc_date: new Date().toISOString().split('T')[0],
             transcode_id: '',
-            warehouse_id: '',
             notes: '',
             status: 'Draft',
             inputItems: [],
@@ -331,7 +330,7 @@ function ItemConversionList() {
                     type="button"
                     className="btn btn-outline"
                     onClick={handleAdd}
-                    disabled={formData.status !== 'Draft' || !formData.warehouse_id}
+                    disabled={formData.status !== 'Draft'}
                 >
                     + Tambah Item
                 </button>
@@ -350,7 +349,7 @@ function ItemConversionList() {
                     {items.length === 0 ? (
                         <tr>
                             <td colSpan="5" style={{ textAlign: 'center', padding: '1rem', color: '#888' }}>
-                                {!formData.warehouse_id ? 'Pilih Warehouse terlebih dahulu.' : 'Belum ada item.'}
+                                Belum ada item.
                             </td>
                         </tr>
                     ) : (

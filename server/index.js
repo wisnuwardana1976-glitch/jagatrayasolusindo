@@ -3133,9 +3133,12 @@ app.post('/api/inventory/recalculate-deprecated', async (req, res) => {
             rd.item_id, 
             rd.quantity, 
             pod.unit_price as cost, 
-            r.warehouse_id
+            w.id as warehouse_id
         FROM ReceivingDetails rd
         JOIN Receivings r ON rd.receiving_id = r.id
+        LEFT JOIN Locations l ON r.location_id = l.id
+        LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+        LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
         LEFT JOIN PurchaseOrderDetails pod ON r.po_id = pod.po_id AND rd.item_id = pod.item_id
         WHERE r.status = 'Approved'
         
@@ -4690,9 +4693,9 @@ app.post('/api/inventory-adjustments', async (req, res) => {
     for (const item of items || []) {
       console.log('Inserting item:', item);
       await connection.query(`
-        INSERT INTO InventoryAdjustmentDetails (adjustment_id, item_id, quantity, unit_cost, amount, notes)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [adjustmentId, item.item_id, item.quantity, item.unit_cost, item.amount, item.notes || '']);
+        INSERT INTO InventoryAdjustmentDetails (adjustment_id, item_id, quantity, unit_cost, amount, notes, location_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [adjustmentId, item.item_id, item.quantity, item.unit_cost, item.amount, item.notes || '', item.location_id || null]);
     }
 
     res.json({ success: true, message: 'Adjustment berhasil disimpan', id: adjustmentId });
@@ -4721,9 +4724,9 @@ app.put('/api/inventory-adjustments/:id', async (req, res) => {
     await connection.query('DELETE FROM InventoryAdjustmentDetails WHERE adjustment_id = ?', [req.params.id]);
     for (const item of items || []) {
       await connection.query(`
-        INSERT INTO InventoryAdjustmentDetails (adjustment_id, item_id, quantity, unit_cost, amount, notes)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [req.params.id, item.item_id, item.quantity, item.unit_cost, item.amount, item.notes || '']);
+        INSERT INTO InventoryAdjustmentDetails (adjustment_id, item_id, quantity, unit_cost, amount, notes, location_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [req.params.id, item.item_id, item.quantity, item.unit_cost, item.amount, item.notes || '', item.location_id || null]);
     }
 
     res.json({ success: true, message: 'Adjustment berhasil diupdate' });
@@ -6317,7 +6320,7 @@ app.get('/api/reports/stock-summary', async (req, res) => {
         END as average_cost,
         SUM(COALESCE(s.quantity, 0) * COALESCE(s.average_cost, 0)) as total_value
       FROM Items i
-      LEFT JOIN ItemStocks s ON i.id = s.item_id
+      LEFT JOIN ItemStocks s ON i.id = s.item_id ${warehouse_id ? 'AND s.warehouse_id = ?' : ''}
       LEFT JOIN Units u ON i.unit = u.name OR CAST(i.unit AS VARCHAR(50)) = CAST(u.id AS VARCHAR(50))
       WHERE 1=1
     `;
@@ -6325,7 +6328,6 @@ app.get('/api/reports/stock-summary', async (req, res) => {
     const params = [];
 
     if (warehouse_id) {
-      query += ' AND s.warehouse_id = ?';
       params.push(warehouse_id);
     }
 
@@ -6625,8 +6627,8 @@ app.post('/api/item-conversions', async (req, res) => {
     const totalOutputAmount = (outputItems || []).reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
 
     await connection.query(`
-      INSERT INTO ItemConversions (doc_number, doc_date, warehouse_id, transcode_id, notes, total_input_amount, total_output_amount, status)
-      VALUES (?, ?, NULL, ?, ?, ?, ?, 'Draft')
+      INSERT INTO ItemConversions (doc_number, doc_date, transcode_id, notes, total_input_amount, total_output_amount, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'Draft')
     `, [doc_number, doc_date, transcode_id || null, notes || '', totalInputAmount, totalOutputAmount]);
 
     const idResult = await connection.query('SELECT @@IDENTITY as id');
@@ -6959,6 +6961,10 @@ app.post('/api/inventory/recalculate', async (req, res) => {
     const items = await connection.query(itemQuery, itemParams);
     console.log(`Processing ${items.length} items...`);
 
+
+
+
+    let lastTransactions = [];
     for (const item of items) {
       // Clear Stock
       if (warehouse_id) {
@@ -6971,22 +6977,26 @@ app.post('/api/inventory/recalculate', async (req, res) => {
       // RECEIVINGS (IN)
       // Check if unit_price exists in ReceivingDetails (added by script), fallback to PO
       let rxQuery = `
-        SELECT 'IN' as dir, 'RCV' as type, r.doc_date, r.created_at, 
+        SELECT 'IN' as dir, 'RCV' as type, r.doc_date, NULL as created_at, 
                rd.quantity, 
                COALESCE(rd.unit_price, pod.unit_price, i.standard_cost, 0) as cost,
-               r.warehouse_id, rd.location_id
+               w.id as warehouse_id, 
+               COALESCE(rd.location_id, r.location_id) as location_id
         FROM ReceivingDetails rd
         JOIN Receivings r ON rd.receiving_id = r.id
+        LEFT JOIN Locations l ON COALESCE(rd.location_id, r.location_id) = l.id
+        LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+        LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
         LEFT JOIN PurchaseOrderDetails pod ON rd.po_detail_id = pod.id
         JOIN Items i ON rd.item_id = i.id
         WHERE rd.item_id = ? AND r.status = 'Posted'
       `;
-      if (warehouse_id) rxQuery += ` AND r.warehouse_id = ${warehouse_id}`;
+      if (warehouse_id) rxQuery += ` AND w.id = ${warehouse_id}`;
 
       // SHIPMENTS (OUT)
       // Warehouse ID missing in Shipments, using Fallback to First Warehouse
       let shQuery = `
-        SELECT 'OUT' as dir, 'SHP' as type, s.doc_date, s.created_at,
+        SELECT 'OUT' as dir, 'SHP' as type, s.doc_date, NULL as created_at,
                sd.quantity, 0 as cost,
                (SELECT TOP 1 id FROM Warehouses) as warehouse_id, NULL as location_id
         FROM ShipmentDetails sd
@@ -7002,12 +7012,32 @@ app.post('/api/inventory/recalculate', async (req, res) => {
           CASE WHEN d.quantity > 0 THEN 'IN' ELSE 'OUT' END as dir,
           'ADJ' as type, h.doc_date, h.created_at,
           ABS(d.quantity) as quantity, d.unit_cost as cost,
-          h.warehouse_id, NULL as location_id
+          h.warehouse_id, d.location_id
         FROM InventoryAdjustmentDetails d
         JOIN InventoryAdjustments h ON d.adjustment_id = h.id
         WHERE d.item_id = ? AND h.status = 'Posted'
       `;
       if (warehouse_id) adjQuery += ` AND h.warehouse_id = ${warehouse_id}`;
+
+      // ITEM CONVERSIONS (IN/OUT)
+      // INPUT = Decrease Stock (OUT)
+      // OUTPUT = Increase Stock (IN)
+      let convQuery = `
+        SELECT 
+          CASE WHEN icd.detail_type = 'OUTPUT' THEN 'IN' ELSE 'OUT' END as dir,
+          'CNV' as type, ic.doc_date, ic.created_at,
+          icd.quantity,
+          icd.unit_cost as cost,
+          w.id as warehouse_id,
+          icd.location_id
+        FROM ItemConversionDetails icd
+        JOIN ItemConversions ic ON icd.conversion_id = ic.id
+        LEFT JOIN Locations l ON icd.location_id = l.id
+        LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+        LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
+        WHERE icd.item_id = ? AND ic.status = 'Posted'
+      `;
+      if (warehouse_id) convQuery += ` AND w.id = ${warehouse_id}`;
 
       // Execute Queries
       let transactions = [];
@@ -7026,6 +7056,13 @@ app.post('/api/inventory/recalculate', async (req, res) => {
         if (Array.isArray(adjs)) transactions.push(...adjs);
       } catch (e) { console.warn('Error fetching Adjustments:', e.message); }
 
+      try {
+        const convs = await connection.query(convQuery, [item.id]);
+        if (Array.isArray(convs)) {
+          transactions.push(...convs);
+        }
+      } catch (e) { console.warn('Error fetching Conversions:', e.message); }
+
       // Sort
       transactions.sort((a, b) => {
         const da = new Date(a.doc_date);
@@ -7035,6 +7072,7 @@ app.post('/api/inventory/recalculate', async (req, res) => {
         // Let's rely on created_at or default stable sort
         return 0;
       });
+      lastTransactions = transactions;
 
       // 3. Calculate
       // Map: WarehouseID -> { qty, value, locs: { LocID: qty } }
@@ -7047,6 +7085,7 @@ app.post('/api/inventory/recalculate', async (req, res) => {
       //   We will try to deduct from "Largest Stock" location (FIFO-ish).
 
       let whStock = {}; // { whId: { totalQty: 0, totalVal: 0, avg: 0, locations: { locId: qty } } }
+      console.log('Recalc DEBUG Transactions:', JSON.stringify(transactions.filter(t => t.type === 'ADJ'), null, 2));
 
       for (const tx of transactions) {
         const whId = tx.warehouse_id || 0;
@@ -7126,16 +7165,183 @@ app.post('/api/inventory/recalculate', async (req, res) => {
           await connection.query(`
              INSERT INTO ItemStocks (item_id, warehouse_id, location_id, quantity, average_cost, last_updated)
              VALUES (?, ?, ?, ?, ?, CURRENT TIMESTAMP)
-           `, [item.id, whId, locId === '0' ? null : locId, qty, data.avg]);
+           `, [item.id, parseInt(whId), locId === '0' ? null : parseInt(locId), qty, data.avg]);
+
+
         }
       }
     }
 
     await connection.commit();
-    res.json({ success: true, message: 'Recalculation complete' });
+    res.json({
+      success: true,
+      message: 'Recalculation complete'
+    });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error('Recalculate Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+// ==================== HISTORY GENERATION ====================
+app.post('/api/inventory/history-generate', async (req, res) => {
+  let connection;
+  try {
+    const { period, item_id } = req.body; // period: 'YYYY-MM'
+    if (!period) return res.status(400).json({ success: false, error: 'Period (YYYY-MM) is required' });
+
+    console.log(`Generating Stock History for ${period}...`);
+    connection = await odbc.connect(connectionString);
+
+    // 1. Determine Date Range
+    const [year, month] = period.split('-').map(Number);
+    const startDate = new Date(year, month - 1, 1).toISOString().split('T')[0]; // YYYY-MM-01
+    // End Date is Last Day of Month
+    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+
+    console.log(`Period: ${startDate} to ${endDate}`);
+
+    // 2. Get Items
+    let items = [];
+    if (item_id) {
+      items = await connection.query('SELECT id, code, name FROM Items WHERE id = ?', [item_id]);
+    } else {
+      items = await connection.query('SELECT id, code, name FROM Items');
+    }
+
+    // 3. Process Items
+    for (const item of items) {
+      // --- FETCH TRANSACTIONS (Duplicated from RecalculateInventory for safety) ---
+      // RECEIVINGS
+      let rxQuery = `
+        SELECT 'IN' as dir, 'RCV' as type, r.doc_date, NULL as created_at, 
+               rd.quantity, 
+               COALESCE(rd.unit_price, pod.unit_price, i.standard_cost, 0) as cost,
+               w.id as warehouse_id, 
+               COALESCE(rd.location_id, r.location_id) as location_id
+        FROM ReceivingDetails rd
+        JOIN Receivings r ON rd.receiving_id = r.id
+        LEFT JOIN Locations l ON COALESCE(rd.location_id, r.location_id) = l.id
+        LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+        LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
+        LEFT JOIN PurchaseOrderDetails pod ON rd.po_detail_id = pod.id
+        JOIN Items i ON rd.item_id = i.id
+        WHERE rd.item_id = ? AND r.status = 'Posted' AND r.doc_date <= ?
+      `;
+
+      let shQuery = `
+        SELECT 'OUT' as dir, 'SHP' as type, s.doc_date, NULL as created_at,
+               sd.quantity, 0 as cost,
+               (SELECT TOP 1 id FROM Warehouses) as warehouse_id, NULL as location_id
+        FROM ShipmentDetails sd
+        JOIN Shipments s ON sd.shipment_id = s.id
+        WHERE sd.item_id = ? AND s.status = 'Posted' AND s.doc_date <= ?
+      `;
+
+      let adjQuery = `
+        SELECT 
+          CASE WHEN d.quantity > 0 THEN 'IN' ELSE 'OUT' END as dir,
+          'ADJ' as type, h.doc_date, h.created_at,
+          ABS(d.quantity) as quantity, d.unit_cost as cost,
+          h.warehouse_id, d.location_id
+        FROM InventoryAdjustmentDetails d
+        JOIN InventoryAdjustments h ON d.adjustment_id = h.id
+        WHERE d.item_id = ? AND h.status = 'Posted' AND h.doc_date <= ?
+      `;
+
+      let convQuery = `
+        SELECT 
+          CASE WHEN icd.detail_type = 'OUTPUT' THEN 'IN' ELSE 'OUT' END as dir,
+          'CNV' as type, ic.doc_date, ic.created_at,
+          icd.quantity,
+          icd.unit_cost as cost,
+          w.id as warehouse_id,
+          icd.location_id
+        FROM ItemConversionDetails icd
+        JOIN ItemConversions ic ON icd.conversion_id = ic.id
+        LEFT JOIN Locations l ON icd.location_id = l.id
+        LEFT JOIN SubWarehouses sw ON l.sub_warehouse_id = sw.id
+        LEFT JOIN Warehouses w ON sw.warehouse_id = w.id
+        WHERE icd.item_id = ? AND ic.status = 'Posted' AND ic.doc_date <= ?
+      `;
+
+      const [rxs, shs, adjs, convs] = await Promise.all([
+        connection.query(rxQuery, [item.id, endDate]),
+        connection.query(shQuery, [item.id, endDate]),
+        connection.query(adjQuery, [item.id, endDate]),
+        connection.query(convQuery, [item.id, endDate])
+      ]);
+
+      let transactions = [...rxs, ...shs, ...adjs, ...convs];
+      transactions.sort((a, b) => new Date(a.doc_date) - new Date(b.doc_date));
+
+      // --- SIMULATE ---
+      let stockMap = {}; // Key: "whId-locId" -> qty
+
+      // Helper for Key
+      const getKey = (w, l) => `${w || 0}-${l || 0}`;
+      const parseKey = (k) => k.split('-').map(Number); // [wh, loc]
+
+      let historyMap = {};
+      // Key: "whId-locId" -> { start: 0, in: 0, out: 0, end: 0 }
+
+      for (const tx of transactions) {
+        const txDate = new Date(tx.doc_date).toISOString().split('T')[0];
+        const isPeriod = txDate >= startDate && txDate <= endDate;
+
+        const whId = tx.warehouse_id || 0;
+        const locId = tx.location_id || 0;
+        const key = getKey(whId, locId);
+
+        if (!stockMap[key]) stockMap[key] = 0;
+        if (!historyMap[key]) historyMap[key] = { start: 0, in: 0, out: 0, end: 0, whId, locId };
+
+        const qty = Number(tx.quantity);
+
+        if (txDate < startDate) {
+          if (tx.dir === 'IN') stockMap[key] += qty;
+          else stockMap[key] -= qty;
+        } else {
+          // Inside Period
+          if (tx.dir === 'IN') {
+            historyMap[key].in += qty;
+            stockMap[key] += qty;
+          } else {
+            historyMap[key].out += qty;
+            stockMap[key] -= qty;
+          }
+        }
+      }
+
+      // 4. Save to DB
+      // Clear existing history for this period/item
+      await connection.query('DELETE FROM ItemStockHistory WHERE period = ? AND item_id = ?', [period, item.id]);
+
+      for (const key in stockMap) {
+        const endQty = stockMap[key];
+        const h = historyMap[key] || { in: 0, out: 0, whId: 0, locId: 0 };
+        if (!h.whId) { // If usage was only pre-period
+          const [w, l] = parseKey(key);
+          h.whId = w; h.locId = l;
+        }
+
+        const startQty = endQty - h.in + h.out;
+
+        if (startQty === 0 && h.in === 0 && h.out === 0 && endQty === 0) continue;
+
+        await connection.query(`
+            INSERT INTO ItemStockHistory (period, item_id, warehouse_id, location_id, start_qty, stock_in, stock_out, end_qty)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         `, [period, item.id, h.whId || 0, h.locId || 0, startQty, h.in, h.out, endQty]);
+      }
+    }
+
+    res.json({ success: true, message: 'History generated' });
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ success: false, error: error.message });
   } finally {
     if (connection) await connection.close();
