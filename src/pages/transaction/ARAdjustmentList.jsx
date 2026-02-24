@@ -23,8 +23,10 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
         notes: '',
         status: 'Draft',
         allocate_to_invoice: 'N',
-        allocations: []
+        allocations: [],
+        currency_code: ''
     });
+    const [currencies, setcurrencies] = useState([]);
 
     const title = adjustmentType === 'DEBIT' ? 'AR Debit Adjustment' : 'AR Credit Adjustment';
     const subtitle = adjustmentType === 'DEBIT' ? 'Menambah Piutang' : 'Mengurangi Piutang';
@@ -64,14 +66,16 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
 
     const fetchMasterData = async () => {
         try {
-            const [custRes, accRes, transRes] = await Promise.all([
+            const [custRes, accRes, transRes, rateRes] = await Promise.all([
                 fetch('/api/partners?type=Customer'),
                 fetch('/api/accounts'),
-                fetch('/api/transcodes')
+                fetch('/api/transcodes'),
+                fetch('/api/currencies')
             ]);
             const custData = await custRes.json();
             const accData = await accRes.json();
             const transData = await transRes.json();
+            const rateData = await rateRes.json();
 
             if (custData.success) setCustomers(custData.data);
             if (accData.success) setAccounts(accData.data);
@@ -80,6 +84,7 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                 const transCodeNum = adjustmentType === 'DEBIT' ? 40 : 41;
                 setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === transCodeNum));
             }
+            if (rateData.success) setcurrencies(rateData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -162,7 +167,8 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                     notes: adj.description || adj.notes || '',
                     status: adj.status,
                     allocate_to_invoice: adj.allocate_to_invoice || 'N',
-                    allocations: adj.allocations || []
+                    allocations: adj.allocations || [],
+                    currency_code: adj.currency_code || ''
                 });
 
                 if (adj.partner_id) {
@@ -289,12 +295,24 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
             notes: '',
             status: 'Draft',
             allocate_to_invoice: 'N',
-            allocations: []
+            allocations: [],
+            currency_code: ''
         });
     };
 
+    
+
+    const formatCurrency = (value) => {
+        const code = formData.currency_code || 'IDR';
+        try {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code }).format(value || 0);
+        } catch {
+            return `${code} ${new Intl.NumberFormat('id-ID').format(value || 0)}`;
+        }
+    };
+
     const formatDate = (date) => new Date(date).toLocaleDateString('id-ID');
-    const formatMoney = (amount) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
+    const formatMoney = (amount) => formatCurrency(amount);
 
     const getStatusBadge = (status) => {
         const badges = {
@@ -367,6 +385,21 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
                                         required
                                         disabled={formData.status !== 'Draft'}
                                     />
+                                </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
 
@@ -589,3 +622,5 @@ function ARAdjustmentList({ adjustmentType = 'DEBIT' }) {
 }
 
 export default ARAdjustmentList;
+
+

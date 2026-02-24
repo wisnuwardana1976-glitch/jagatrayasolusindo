@@ -17,13 +17,13 @@ function PurchaseOrderList() {
         status: 'Draft',
         details: [],
         transcode_id: '',
-        details: [],
-        transcode_id: '',
         tax_type: 'Exclude', // 'Exclude' | 'Include' | 'No Tax'
-        payment_term_id: ''
+        payment_term_id: '',
+        currency_code: ''
     });
     const [transcodes, setTranscodes] = useState([]);
     const [paymentTerms, setPaymentTerms] = useState([]);
+    const [currencies, setcurrencies] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -57,16 +57,18 @@ function PurchaseOrderList() {
 
     const fetchMasterData = async () => {
         try {
-            const [suppRes, itemRes, transRes, topRes] = await Promise.all([
+            const [suppRes, itemRes, transRes, topRes, rateRes] = await Promise.all([
                 fetch('/api/partners?type=Supplier'),
                 fetch('/api/items'),
                 fetch('/api/transcodes'),
-                fetch('/api/payment-terms')
+                fetch('/api/payment-terms'),
+                fetch('/api/currencies')
             ]);
             const suppData = await suppRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
             const topData = await topRes.json();
+            const rateData = await rateRes.json();
 
             if (suppData.success) setSuppliers(suppData.data);
             if (itemData.success) setItems(itemData.data);
@@ -76,6 +78,7 @@ function PurchaseOrderList() {
                 setTranscodes(poTranscodes);
             }
             if (topData.success) setPaymentTerms(topData.data.filter(t => t.active === 'Y'));
+            if (rateData.success) setcurrencies(rateData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -163,7 +166,8 @@ function PurchaseOrderList() {
                     transcode_id: po.transcode_id || '',
                     transcode_id: po.transcode_id || '',
                     tax_type: po.tax_type || (po.ppn_included !== undefined ? (po.ppn_included ? 'Exclude' : 'No Tax') : 'Exclude'),
-                    payment_term_id: po.payment_term_id || ''
+                    payment_term_id: po.payment_term_id || '',
+                    currency_code: po.currency_code || ''
                 });
                 setEditingItem(id);
                 setShowForm(true);
@@ -255,14 +259,21 @@ function PurchaseOrderList() {
             status: 'Draft',
             details: [],
             transcode_id: '',
-            details: [],
-            transcode_id: '',
-            tax_type: 'Exclude'
+            tax_type: 'Exclude',
+            payment_term_id: '',
+            currency_code: ''
         });
     };
 
+    
+
     const formatCurrency = (value) => {
-        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(value || 0);
+        const code = formData.currency_code || 'IDR';
+        try {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code }).format(value || 0);
+        } catch {
+            return `${code} ${new Intl.NumberFormat('id-ID').format(value || 0)}`;
+        }
     };
 
     const formatDate = (date) => {
@@ -383,6 +394,23 @@ function PurchaseOrderList() {
                                         disabled={formData.status === 'Approved'}
                                     />
                                 </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status === 'Approved' || formData.status === 'Closed'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="form-row">
                                 <div className="form-group">
                                     <label>Supplier</label>
                                     <select
@@ -631,3 +659,5 @@ function PurchaseOrderList() {
 }
 
 export default PurchaseOrderList;
+
+

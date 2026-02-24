@@ -21,8 +21,10 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
         counter_account_id: '',
         notes: '',
         status: 'Draft',
-        items: []
+        items: [],
+        currency_code: ''
     });
+    const [currencies, setcurrencies] = useState([]);
 
     const title = adjustmentType === 'IN' ? 'Inventory Adjustment In' : 'Inventory Adjustment Out';
     const subtitle = adjustmentType === 'IN' ? 'Penambahan Stok' : 'Pengurangan Stok';
@@ -56,16 +58,18 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
 
     const fetchMasterData = async () => {
         try {
-            const [whRes, accRes, itemRes, transRes] = await Promise.all([
+            const [whRes, accRes, itemRes, transRes, rateRes] = await Promise.all([
                 fetch('/api/warehouses'),
                 fetch('/api/accounts'),
                 fetch('/api/items'),
-                fetch('/api/transcodes')
+                fetch('/api/transcodes'),
+                fetch('/api/currencies')
             ]);
             const whData = await whRes.json();
             const accData = await accRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
+            const rateData = await rateRes.json();
 
             if (whData.success) setWarehouses(whData.data);
             if (accData.success) setAccounts(accData.data);
@@ -75,6 +79,7 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
                 const transCodeNum = adjustmentType === 'IN' ? 20 : 21;
                 setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === transCodeNum));
             }
+            if (rateData.success) setcurrencies(rateData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -158,7 +163,8 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
                         unit_cost: parseFloat(d.unit_cost),
                         amount: parseFloat(d.amount),
                         notes: d.notes || ''
-                    }))
+                    })),
+                    currency_code: adj.currency_code || ''
                 });
                 setEditingItem(id);
                 setShowForm(true);
@@ -292,12 +298,24 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
             counter_account_id: '',
             notes: '',
             status: 'Draft',
-            items: []
+            items: [],
+            currency_code: ''
         });
     };
 
+    
+
+    const formatCurrency = (value) => {
+        const code = formData.currency_code || 'IDR';
+        try {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code }).format(value || 0);
+        } catch {
+            return `${code} ${new Intl.NumberFormat('id-ID').format(value || 0)}`;
+        }
+    };
+
     const formatDate = (date) => new Date(date).toLocaleDateString('id-ID');
-    const formatMoney = (amount) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
+    const formatMoney = (amount) => formatCurrency(amount);
 
     const calculateTotal = () => {
         return formData.items.reduce((sum, item) => sum + (parseFloat(item.quantity || 0) * parseFloat(item.unit_cost || 0)), 0);
@@ -372,6 +390,21 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
                                         required
                                         disabled={formData.status !== 'Draft'}
                                     />
+                                </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
 
@@ -593,3 +626,5 @@ function InventoryAdjustmentList({ adjustmentType = 'IN' }) {
 }
 
 export default InventoryAdjustmentList;
+
+

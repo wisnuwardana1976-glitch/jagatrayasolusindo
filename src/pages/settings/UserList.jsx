@@ -141,8 +141,20 @@ const UserList = () => {
                                 </td>
                                 <td>
                                     <div className="action-buttons">
-                                        <button className="btn-icon" onClick={() => handleEdit(user)}>✏️</button>
-                                        <button className="btn-icon" onClick={() => handleDelete(user.id)}>🗑️</button>
+                                        <button className="btn-icon" onClick={() => handleEdit(user)} title="Edit User">✏️</button>
+                                        <button className="btn-icon" onClick={() => {
+                                            setFormData({
+                                                username: user.username,
+                                                password: '',
+                                                full_name: user.full_name,
+                                                role_id: user.role_id,
+                                                active: user.active
+                                            });
+                                            setIsEditing(true);
+                                            setEditId(user.id);
+                                            setShowModal(true);
+                                        }} title="Reset Password" style={{ fontSize: '0.9rem', marginRight: '5px' }}>🔑</button>
+                                        <button className="btn-icon" onClick={() => handleDelete(user.id)} title="Delete User">🗑️</button>
                                     </div>
                                 </td>
                             </tr>

@@ -25,8 +25,10 @@ function ReceivingList() {
         status: 'Draft',
         transcode_id: '',
         remarks: '',
-        items: []
+        items: [],
+        currency_code: ''
     });
+    const [currencies, setcurrencies] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -56,12 +58,13 @@ function ReceivingList() {
 
     const fetchMasterData = async () => {
         try {
-            const [suppRes, whRes, itemRes, transRes, poRes] = await Promise.all([
+            const [suppRes, whRes, itemRes, transRes, poRes, rateRes] = await Promise.all([
                 fetch('/api/partners?type=Supplier'),
                 fetch('/api/locations'),
                 fetch('/api/items'),
                 fetch('/api/transcodes'),
-                fetch('/api/purchase-orders') // Ideally filter for status Approved
+                fetch('/api/purchase-orders'), // Ideally filter for status Approved
+                fetch('/api/currencies')
             ]);
 
             const suppData = await suppRes.json();
@@ -69,6 +72,7 @@ function ReceivingList() {
             const itemData = await itemRes.json();
             const transData = await transRes.json();
             const poData = await poRes.json();
+            const rateData = await rateRes.json();
 
             if (suppData.success) setSuppliers(suppData.data);
             if (suppData.success) setSuppliers(suppData.data);
@@ -82,6 +86,7 @@ function ReceivingList() {
                 // Store all POs, filter in render
                 setPurchaseOrders(poData.data);
             }
+            if (rateData.success) setcurrencies(rateData.data);
 
         } catch (error) {
             console.error('Error fetching master data:', error);
@@ -179,8 +184,8 @@ function ReceivingList() {
                     status: rec.status,
                     transcode_id: rec.transcode_id || '',
                     remarks: rec.remarks || '',
+                    currency_code: rec.currency_code || '',
                     items: rec.details.map(d => ({
-                        item_id: d.item_id,
                         item_id: d.item_id,
                         quantity: parseFloat(d.quantity),
                         unit_price: parseFloat(d.unit_price || 0),
@@ -258,7 +263,8 @@ function ReceivingList() {
             status: 'Draft',
             transcode_id: '',
             remarks: '',
-            items: []
+            items: [],
+            currency_code: ''
         });
     };
 
@@ -335,6 +341,21 @@ function ReceivingList() {
                                         onChange={e => setFormData({ ...formData, doc_date: e.target.value })}
                                         disabled={formData.status !== 'Draft'}
                                     />
+                                </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
 
@@ -568,3 +589,5 @@ function ReceivingList() {
 }
 
 export default ReceivingList;
+
+

@@ -132,6 +132,37 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
+
+    // Get user
+    const users = await executeQuery('SELECT * FROM Users WHERE id = ?', [userId]);
+    if (users.length === 0) return res.status(404).json({ success: false, error: 'User not found' });
+
+    const user = users[0];
+
+    // Verify current password
+    const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!validPassword) {
+      return res.status(400).json({ success: false, error: 'Password saat ini salah' });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update password
+    await executeQuery('UPDATE Users SET password_hash = ? WHERE id = ?', [hashedPassword, userId]);
+
+    res.json({ success: true, message: 'Password berhasil diubah' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== USER MANAGEMENT ====================
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
@@ -192,6 +223,35 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
   try {
     await executeQuery('DELETE FROM Users WHERE id = ?', [req.params.id]);
     res.json({ success: true, message: 'User berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==== TEMP MIGRATION ====
+app.get('/api/migrate-exchangerate-currencycode', async (req, res) => {
+  try {
+    const tables = [
+      'PurchaseOrders',
+      'SalesOrders',
+      'Receivings',
+      'APInvoices',
+      'ARInvoices',
+      'InventoryAdjustments',
+      'APAdjustments',
+      'ARAdjustments'
+    ];
+    let results = [];
+    for (const table of tables) {
+      try {
+        await executeQuery(`ALTER TABLE ${table} DROP currency_code`);
+        await executeQuery(`ALTER TABLE ${table} ADD currency_code VARCHAR(10) NULL`);
+        results.push({ table, status: 'success' });
+      } catch (err) {
+        results.push({ table, status: 'error', error: err.message });
+      }
+    }
+    res.json({ success: true, results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -518,6 +578,368 @@ app.delete('/api/payment-terms/:id', async (req, res) => {
   try {
     await executeQuery('DELETE FROM PaymentTerms WHERE id = ?', [req.params.id]);
     res.json({ success: true, message: 'Term of Payment berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== CURRENCIES (MASTER MATA UANG) ====================
+app.get('/api/currencies', async (req, res) => {
+  try {
+    const result = await executeQuery("SELECT * FROM Currencies ORDER BY is_base DESC, code");
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Currency conversion endpoint (must be before :id route)
+app.get('/api/currencies/convert', async (req, res) => {
+  try {
+    const { from, to, amount, date, rate_type_id, period, year, month } = req.query;
+
+    // Determine the rate date based on period type
+    let rateDate;
+    if (period === 'month' && year && month) {
+      // Use last day of the selected month
+      const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+      rateDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    } else if (date) {
+      rateDate = date;
+    } else {
+      rateDate = new Date().toISOString().split('T')[0];
+    }
+
+    const fromCurrency = await executeQuery('SELECT * FROM Currencies WHERE code = ?', [from]);
+    const toCurrency = await executeQuery('SELECT * FROM Currencies WHERE code = ?', [to]);
+
+    if (!fromCurrency[0] || !toCurrency[0]) {
+      return res.status(400).json({ success: false, error: 'Currency tidak ditemukan' });
+    }
+
+    let fromRate = 1, toRate = 1;
+    let fromRateTypeName = '', toRateTypeName = '';
+    let fromRateDate = '', toRateDate = '';
+
+    // Build rate query with optional rate_type_id filter
+    const rateTypeFilter = rate_type_id ? ' AND cr.rate_type_id = ?' : '';
+    const rateTypeParam = rate_type_id ? [parseInt(rate_type_id)] : [];
+
+    if (fromCurrency[0].is_base !== 'Y') {
+      const rates = await executeQuery(
+        `SELECT TOP 1 cr.*, ert.code as rate_type_code, ert.name as rate_type_name
+         FROM CurrencyRates cr
+         LEFT JOIN ExchangeRateTypes ert ON cr.rate_type_id = ert.id
+         WHERE cr.currency_id = ? AND cr.rate_date <= ?${rateTypeFilter}
+         ORDER BY cr.rate_date DESC`,
+        [fromCurrency[0].id, rateDate, ...rateTypeParam]
+      );
+      if (rates[0]) {
+        fromRate = parseFloat(rates[0].middle_rate);
+        fromRateTypeName = rates[0].rate_type_code || '';
+        fromRateDate = rates[0].rate_date;
+      }
+    }
+
+    if (toCurrency[0].is_base !== 'Y') {
+      const rates = await executeQuery(
+        `SELECT TOP 1 cr.*, ert.code as rate_type_code, ert.name as rate_type_name
+         FROM CurrencyRates cr
+         LEFT JOIN ExchangeRateTypes ert ON cr.rate_type_id = ert.id
+         WHERE cr.currency_id = ? AND cr.rate_date <= ?${rateTypeFilter}
+         ORDER BY cr.rate_date DESC`,
+        [toCurrency[0].id, rateDate, ...rateTypeParam]
+      );
+      if (rates[0]) {
+        toRate = parseFloat(rates[0].middle_rate);
+        toRateTypeName = rates[0].rate_type_code || '';
+        toRateDate = rates[0].rate_date;
+      }
+    }
+
+    const baseAmount = parseFloat(amount) * fromRate;
+    const result = baseAmount / toRate;
+
+    res.json({
+      success: true,
+      data: {
+        from, to, amount: parseFloat(amount),
+        result: Math.round(result * 1000000) / 1000000,
+        fromRate, toRate, date: rateDate,
+        fromRateType: fromRateTypeName, toRateType: toRateTypeName,
+        fromRateDate, toRateDate,
+        period: period || 'date'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/currencies/:id', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM Currencies WHERE id = ?', [req.params.id]);
+    res.json({ success: true, data: result[0] || null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/currencies', async (req, res) => {
+  try {
+    const { code, name, symbol, decimal_places, is_base, active } = req.body;
+
+    // If setting as base, clear other base currencies
+    if (is_base === 'Y') {
+      await executeQuery("UPDATE Currencies SET is_base = 'N' WHERE is_base = 'Y'");
+    }
+
+    await executeQuery(
+      'INSERT INTO Currencies (code, name, symbol, decimal_places, is_base, active) VALUES (?, ?, ?, ?, ?, ?)',
+      [code, name, symbol || '', decimal_places || 2, is_base || 'N', active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM Currencies WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Currency berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/currencies/:id', async (req, res) => {
+  try {
+    const { code, name, symbol, decimal_places, is_base, active } = req.body;
+
+    // If setting as base, clear other base currencies
+    if (is_base === 'Y') {
+      await executeQuery("UPDATE Currencies SET is_base = 'N' WHERE is_base = 'Y' AND id != ?", [req.params.id]);
+    }
+
+    await executeQuery(
+      'UPDATE Currencies SET code = ?, name = ?, symbol = ?, decimal_places = ?, is_base = ?, active = ? WHERE id = ?',
+      [code, name, symbol, decimal_places, is_base, active, req.params.id]
+    );
+    res.json({ success: true, message: 'Currency berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/currencies/:id', async (req, res) => {
+  try {
+    // Don't allow deleting base currency
+    const currency = await executeQuery('SELECT * FROM Currencies WHERE id = ?', [req.params.id]);
+    if (currency[0] && currency[0].is_base === 'Y') {
+      return res.status(400).json({ success: false, error: 'Tidak bisa menghapus base currency' });
+    }
+    await executeQuery('DELETE FROM CurrencyRates WHERE currency_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM Currencies WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Currency berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== CURRENCY RATES ====================
+app.get('/api/currencies/:id/rates', async (req, res) => {
+  try {
+    const result = await executeQuery(
+      `SELECT cr.*, ert.code as rate_type_code, ert.name as rate_type_name
+       FROM CurrencyRates cr
+       LEFT JOIN ExchangeRateTypes ert ON cr.rate_type_id = ert.id
+       WHERE cr.currency_id = ?
+       ORDER BY cr.rate_date DESC, ert.code`,
+      [req.params.id]
+    );
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/currencies/:id/rates', async (req, res) => {
+  try {
+    const { rate_date, buy_rate, sell_rate, middle_rate, rate_type_id } = req.body;
+    await executeQuery(
+      'INSERT INTO CurrencyRates (currency_id, rate_date, buy_rate, sell_rate, middle_rate, rate_type_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.params.id, rate_date, buy_rate, sell_rate, middle_rate, rate_type_id || null]
+    );
+    res.json({ success: true, message: 'Kurs berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/currency-rates/:id', async (req, res) => {
+  try {
+    const { rate_date, buy_rate, sell_rate, middle_rate, rate_type_id } = req.body;
+    await executeQuery(
+      'UPDATE CurrencyRates SET rate_date = ?, buy_rate = ?, sell_rate = ?, middle_rate = ?, rate_type_id = ? WHERE id = ?',
+      [rate_date, buy_rate, sell_rate, middle_rate, rate_type_id || null, req.params.id]
+    );
+    res.json({ success: true, message: 'Kurs berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/currency-rates/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CurrencyRates WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Kurs berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// ==================== EXCHANGE RATE TYPES ====================
+app.get('/api/exchange-rate-types', async (req, res) => {
+  try {
+    const result = await executeQuery("SELECT * FROM ExchangeRateTypes ORDER BY code");
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/exchange-rate-types', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery(
+      'INSERT INTO ExchangeRateTypes (code, name, description, active) VALUES (?, ?, ?, ?)',
+      [code, name, description || '', active || 'Y']
+    );
+    const result = await executeQuery('SELECT * FROM ExchangeRateTypes WHERE code = ?', [code]);
+    res.json({ success: true, data: result[0], message: 'Exchange Rate Type berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/exchange-rate-types/:id', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery(
+      'UPDATE ExchangeRateTypes SET code = ?, name = ?, description = ?, active = ? WHERE id = ?',
+      [code, name, description, active, req.params.id]
+    );
+    res.json({ success: true, message: 'Exchange Rate Type berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/exchange-rate-types/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM ExchangeRateTypes WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Exchange Rate Type berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== EXCHANGE RATES (PERIODS) ====================
+app.get('/api/exchange-rates', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT er.*, ert.code as rate_type_code, ert.name as rate_type_name,
+        (SELECT COUNT(*) FROM ExchangeRateLines WHERE exchange_rate_id = er.id) as line_count
+      FROM ExchangeRates er
+      LEFT JOIN ExchangeRateTypes ert ON er.rate_type_id = ert.id
+      ORDER BY er.from_date DESC, ert.code
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/exchange-rates', async (req, res) => {
+  try {
+    const { rate_type_id, from_date, to_date, description } = req.body;
+    await executeQuery(
+      'INSERT INTO ExchangeRates (rate_type_id, from_date, to_date, description) VALUES (?, ?, ?, ?)',
+      [rate_type_id, from_date, to_date, description || '']
+    );
+    const result = await executeQuery('SELECT MAX(id) as id FROM ExchangeRates');
+    res.json({ success: true, data: { id: result[0].id }, message: 'Exchange Rate berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/exchange-rates/:id', async (req, res) => {
+  try {
+    const { rate_type_id, from_date, to_date, description, status } = req.body;
+    await executeQuery(
+      'UPDATE ExchangeRates SET rate_type_id = ?, from_date = ?, to_date = ?, description = ?, status = ? WHERE id = ?',
+      [rate_type_id, from_date, to_date, description, status || 'A', req.params.id]
+    );
+    res.json({ success: true, message: 'Exchange Rate berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/exchange-rates/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM ExchangeRateLines WHERE exchange_rate_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM ExchangeRates WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Exchange Rate dan detail berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== EXCHANGE RATE LINES ====================
+app.get('/api/exchange-rates/:id/lines', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT erl.*,
+        fc.code as from_currency_code, fc.name as from_currency_name,
+        tc.code as to_currency_code, tc.name as to_currency_name
+      FROM ExchangeRateLines erl
+      LEFT JOIN Currencies fc ON erl.from_currency_id = fc.id
+      LEFT JOIN Currencies tc ON erl.to_currency_id = tc.id
+      WHERE erl.exchange_rate_id = ?
+      ORDER BY fc.code, tc.code
+    `, [req.params.id]);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/exchange-rates/:id/lines', async (req, res) => {
+  try {
+    const { from_currency_id, to_currency_id, rate } = req.body;
+    await executeQuery(
+      'INSERT INTO ExchangeRateLines (exchange_rate_id, from_currency_id, to_currency_id, rate) VALUES (?, ?, ?, ?)',
+      [req.params.id, from_currency_id, to_currency_id, rate]
+    );
+    res.json({ success: true, message: 'Rate line berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/exchange-rate-lines/:id', async (req, res) => {
+  try {
+    const { from_currency_id, to_currency_id, rate } = req.body;
+    await executeQuery(
+      'UPDATE ExchangeRateLines SET from_currency_id = ?, to_currency_id = ?, rate = ? WHERE id = ?',
+      [from_currency_id, to_currency_id, rate, req.params.id]
+    );
+    res.json({ success: true, message: 'Rate line berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/exchange-rate-lines/:id', async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM ExchangeRateLines WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Rate line berhasil dihapus' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -885,12 +1307,12 @@ app.get('/api/shipments', async (req, res) => {
 
 app.post('/api/shipments', async (req, res) => {
   try {
-    const { doc_number, doc_date, so_id, partner_id, status, notes, items, transcode_id } = req.body;
+    const { doc_number, doc_date, so_id, partner_id, status, notes, items, transcode_id, currency_code } = req.body;
     console.log('Creating Shipment:', req.body);
 
     await executeQuery(
-      'INSERT INTO Shipments (doc_number, doc_date, so_id, partner_id, status, notes, transcode_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, so_id || null, partner_id, status || 'Draft', notes || null, transcode_id || null]
+      'INSERT INTO Shipments (doc_number, doc_date, so_id, partner_id, status, notes, transcode_id, currency_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, so_id || null, partner_id, status || 'Draft', notes || null, transcode_id || null, currency_code || null]
     );
 
     const result = await executeQuery('SELECT * FROM Shipments WHERE doc_number = ?', [doc_number]);
@@ -918,11 +1340,11 @@ app.post('/api/shipments', async (req, res) => {
 
 app.put('/api/shipments/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, so_id, partner_id, status, notes, items, transcode_id } = req.body;
+    const { doc_number, doc_date, so_id, partner_id, status, notes, items, transcode_id, currency_code } = req.body;
 
     await executeQuery(
-      'UPDATE Shipments SET doc_number = ?, doc_date = ?, so_id = ?, partner_id = ?, status = ?, notes = ?, transcode_id = ? WHERE id = ?',
-      [doc_number, doc_date, so_id || null, partner_id, status, notes, transcode_id || null, req.params.id]
+      'UPDATE Shipments SET doc_number = ?, doc_date = ?, so_id = ?, partner_id = ?, status = ?, notes = ?, transcode_id = ?, currency_code = ? WHERE id = ?',
+      [doc_number, doc_date, so_id || null, partner_id, status, notes, transcode_id || null, currency_code || null, req.params.id]
     );
 
     await executeQuery('DELETE FROM ShipmentDetails WHERE shipment_id = ?', [req.params.id]);
@@ -1256,27 +1678,37 @@ app.delete('/api/sites/:id', async (req, res) => {
 // ==================== JOURNAL VOUCHERS ====================
 app.get('/api/journals', async (req, res) => {
   try {
-    const { source_type } = req.query;
-    // Include total_amount subquery
+    const { source_type, period_id } = req.query;
+    const params = [];
+    const conditions = [];
+
     let sql = `
       SELECT (SELECT SUM(d.debit) FROM JournalVoucherDetails d WHERE d.jv_id = JournalVouchers.id) as total_amount,
       *
       FROM JournalVouchers
     `;
-    const params = [];
 
     if (source_type) {
-      // Filter by source type (for System Generated Journals)
       if (source_type === 'SYSTEM') {
-        sql += ' WHERE source_type IS NOT NULL';
+        conditions.push('source_type IS NOT NULL');
       } else if (source_type === 'MANUAL') {
-        sql += " WHERE (source_type = 'MANUAL' OR source_type IS NULL)";
+        conditions.push("(source_type = 'MANUAL' OR source_type IS NULL)");
       } else {
-        sql += ' WHERE source_type = ?';
+        conditions.push('source_type = ?');
         params.push(source_type);
       }
-    } else {
-      // Default: Show all
+    }
+
+    if (period_id) {
+      const periods = await executeQuery('SELECT start_date, end_date FROM AccountingPeriods WHERE id = ?', [period_id]);
+      if (periods.length > 0) {
+        conditions.push('doc_date BETWEEN ? AND ?');
+        params.push(periods[0].start_date, periods[0].end_date);
+      }
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
     }
 
     sql += ' ORDER BY doc_date DESC, doc_number DESC';
@@ -1959,15 +2391,15 @@ app.get('/api/purchase-orders/:id', async (req, res) => {
 
 app.post('/api/purchase-orders', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
+    const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type, currency_code } = req.body;
 
     // Calculate total
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     // Insert header
     await executeQuery(
-      'INSERT INTO PurchaseOrders (doc_number, doc_date, partner_id, status, total_amount, transcode_id, payment_term_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude']
+      'INSERT INTO PurchaseOrders (doc_number, doc_date, partner_id, status, total_amount, transcode_id, payment_term_id, tax_type, currency_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude', currency_code || null]
     );
 
     // Get inserted ID
@@ -1992,7 +2424,7 @@ app.post('/api/purchase-orders', async (req, res) => {
 
 app.put('/api/purchase-orders/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
+    const { doc_number, doc_date, partner_id, status, details, transcode_id, payment_term_id, tax_type, currency_code } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     // Validation: Check if linked to Receiving
@@ -2013,8 +2445,8 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     }
 
     await executeQuery(
-      'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, status, total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude', req.params.id]
+      'UPDATE PurchaseOrders SET doc_number = ?, doc_date = ?, partner_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ?, currency_code = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, status, total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude', currency_code || null, req.params.id]
     );
 
     // Update details - delete old and insert new
@@ -2142,12 +2574,12 @@ app.get('/api/sales-orders/:id', async (req, res) => {
 
 app.post('/api/sales-orders', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
+    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id, payment_term_id, tax_type, currency_code } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, sales_person_id, status, total_amount, transcode_id, payment_term_id, tax_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude']
+      'INSERT INTO SalesOrders (doc_number, doc_date, partner_id, sales_person_id, status, total_amount, transcode_id, payment_term_id, tax_type, currency_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, salesperson_id, status || 'Draft', total, transcode_id || null, payment_term_id || null, tax_type || 'Exclude', currency_code || null]
     );
 
     const soResult = await executeQuery('SELECT * FROM SalesOrders WHERE doc_number = ?', [doc_number]);
@@ -2170,12 +2602,12 @@ app.post('/api/sales-orders', async (req, res) => {
 
 app.put('/api/sales-orders/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id, payment_term_id, tax_type } = req.body;
+    const { doc_number, doc_date, partner_id, salesperson_id, status, details, transcode_id, payment_term_id, tax_type, currency_code } = req.body;
     const total = details?.reduce((sum, d) => sum + (d.quantity * d.unit_price), 0) || 0;
 
     await executeQuery(
-      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, sales_person_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, salesperson_id, status, total, transcode_id, payment_term_id || null, tax_type || 'Exclude', req.params.id]
+      'UPDATE SalesOrders SET doc_number = ?, doc_date = ?, partner_id = ?, sales_person_id = ?, status = ?, total_amount = ?, transcode_id = ?, payment_term_id = ?, tax_type = ?, currency_code = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, salesperson_id, status, total, transcode_id, payment_term_id || null, tax_type || 'Exclude', currency_code || null, req.params.id]
     );
 
     await executeQuery('DELETE FROM SalesOrderDetails WHERE so_id = ?', [req.params.id]);
@@ -2305,11 +2737,11 @@ app.get('/api/receivings/:id', async (req, res) => {
 
 app.post('/api/receivings', async (req, res) => {
   try {
-    const { doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, items, transcode_id, remarks } = req.body;
+    const { doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, items, transcode_id, remarks, currency_code } = req.body;
 
     await executeQuery(
-      'INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, transcode_id, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, po_id || null, partner_id, warehouse_id || null, location_id || null, status || 'Draft', transcode_id || null, remarks || '']
+      'INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, transcode_id, remarks, currency_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, po_id || null, partner_id, warehouse_id || null, location_id || null, status || 'Draft', transcode_id || null, remarks || '', currency_code || null]
     );
 
     const result = await executeQuery('SELECT * FROM Receivings WHERE doc_number = ?', [doc_number]);
@@ -2335,11 +2767,11 @@ app.post('/api/receivings', async (req, res) => {
 
 app.put('/api/receivings/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, items, transcode_id, remarks } = req.body;
+    const { doc_number, doc_date, po_id, partner_id, warehouse_id, location_id, status, items, transcode_id, remarks, currency_code } = req.body;
 
     await executeQuery(
-      'UPDATE Receivings SET doc_number = ?, doc_date = ?, po_id = ?, partner_id = ?, warehouse_id = ?, location_id = ?, status = ?, transcode_id = ?, remarks = ? WHERE id = ?',
-      [doc_number, doc_date, po_id || null, partner_id, warehouse_id || null, location_id || null, status, transcode_id || null, remarks || '', req.params.id]
+      'UPDATE Receivings SET doc_number = ?, doc_date = ?, po_id = ?, partner_id = ?, warehouse_id = ?, location_id = ?, status = ?, transcode_id = ?, remarks = ?, currency_code = ? WHERE id = ?',
+      [doc_number, doc_date, po_id || null, partner_id, warehouse_id || null, location_id || null, status, transcode_id || null, remarks || '', currency_code || null, req.params.id]
     );
 
     await executeQuery('DELETE FROM ReceivingDetails WHERE receiving_id = ?', [req.params.id]);
@@ -2517,11 +2949,11 @@ app.get('/api/ap-invoices/:id', async (req, res) => {
 
 app.post('/api/ap-invoices', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items, receiving_id } = req.body;
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items, receiving_id, currency_code } = req.body;
 
     await executeQuery(
-      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, receiving_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', receiving_id || null]
+      'INSERT INTO APInvoices (doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, receiving_id, currency_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, partner_id, due_date || null, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', receiving_id || null, currency_code || null]
     );
 
     const result = await executeQuery('SELECT * FROM APInvoices WHERE doc_number = ?', [doc_number]);
@@ -2544,11 +2976,11 @@ app.post('/api/ap-invoices', async (req, res) => {
 
 app.put('/api/ap-invoices/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items, receiving_id } = req.body;
+    const { doc_number, doc_date, partner_id, due_date, status, notes, transcode_id, tax_type, items, receiving_id, currency_code } = req.body;
 
     await executeQuery(
-      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, receiving_id = ? WHERE id = ?',
-      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, tax_type || 'Exclude', receiving_id || null, req.params.id]
+      'UPDATE APInvoices SET doc_number = ?, doc_date = ?, partner_id = ?, due_date = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, receiving_id = ?, currency_code = ? WHERE id = ?',
+      [doc_number, doc_date, partner_id, due_date || null, status, notes || '', transcode_id || null, tax_type || 'Exclude', receiving_id || null, currency_code || null, req.params.id]
     );
 
     await executeQuery('DELETE FROM APInvoiceDetails WHERE ap_invoice_id = ?', [req.params.id]);
@@ -2744,7 +3176,7 @@ app.get('/api/ar-invoices', async (req, res) => {
 
 app.post('/api/ar-invoices', async (req, res) => {
   try {
-    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
+    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id, currency_code } = req.body;
 
     console.log('AR Invoice POST - Request body:', JSON.stringify(req.body, null, 2));
 
@@ -2756,8 +3188,8 @@ app.post('/api/ar-invoices', async (req, res) => {
 
     console.log('Inserting AR Invoice header...');
     await executeQuery(
-      'INSERT INTO ARInvoices (doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, sales_person_id, payment_term_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [doc_number, doc_date, due_date || null, partner_id, shipment_id || null, total_amount || 0, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null]
+      'INSERT INTO ARInvoices (doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, sales_person_id, payment_term_id, currency_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [doc_number, doc_date, due_date || null, partner_id, shipment_id || null, total_amount || 0, status || 'Draft', notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null, currency_code || null]
     );
     console.log('AR Invoice header inserted successfully');
 
@@ -2787,7 +3219,7 @@ app.post('/api/ar-invoices', async (req, res) => {
 
 app.put('/api/ar-invoices/:id', async (req, res) => {
   try {
-    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id } = req.body;
+    const { doc_number, doc_date, due_date, partner_id, shipment_id, total_amount, status, notes, transcode_id, tax_type, items, sales_person_id, payment_term_id, currency_code } = req.body;
 
     // Validate Accounting Period
     const isPeriodOpen = await validatePeriod(doc_date);
@@ -2796,8 +3228,8 @@ app.put('/api/ar-invoices/:id', async (req, res) => {
     }
 
     await executeQuery(
-      'UPDATE ARInvoices SET doc_number = ?, doc_date = ?, due_date = ?, partner_id = ?, shipment_id = ?, total_amount = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, sales_person_id = ?, payment_term_id = ? WHERE id = ?',
-      [doc_number, doc_date, due_date, partner_id, shipment_id || null, total_amount || 0, status, notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null, req.params.id]
+      'UPDATE ARInvoices SET doc_number = ?, doc_date = ?, due_date = ?, partner_id = ?, shipment_id = ?, total_amount = ?, status = ?, notes = ?, transcode_id = ?, tax_type = ?, sales_person_id = ?, payment_term_id = ?, currency_code = ? WHERE id = ?',
+      [doc_number, doc_date, due_date, partner_id, shipment_id || null, total_amount || 0, status, notes || '', transcode_id || null, tax_type || 'Exclude', sales_person_id || null, payment_term_id || null, currency_code || null, req.params.id]
     );
 
     await executeQuery('DELETE FROM ARInvoiceDetails WHERE ar_invoice_id = ?', [req.params.id]);
@@ -4961,16 +5393,16 @@ app.get('/api/inventory-adjustments/:id', async (req, res) => {
 app.post('/api/inventory-adjustments', async (req, res) => {
   let connection;
   try {
-    const { doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes, items } = req.body;
+    const { doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes, items, currency_code } = req.body;
 
     console.log('Creating inventory adjustment:', { doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes });
 
     connection = await odbc.connect(connectionString);
 
     await connection.query(`
-      INSERT INTO InventoryAdjustments (doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft')
-    `, [doc_number, doc_date, adjustment_type, transcode_id || null, warehouse_id, counter_account_id, notes || '']);
+      INSERT INTO InventoryAdjustments (doc_number, doc_date, adjustment_type, transcode_id, warehouse_id, counter_account_id, notes, status, currency_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
+    `, [doc_number, doc_date, adjustment_type, transcode_id || null, warehouse_id, counter_account_id, notes || '', currency_code || null]);
 
     const adjustmentIdResult = await connection.query('SELECT @@IDENTITY as id');
     const adjustmentId = Number(adjustmentIdResult[0].id);
@@ -4998,14 +5430,14 @@ app.post('/api/inventory-adjustments', async (req, res) => {
 app.put('/api/inventory-adjustments/:id', async (req, res) => {
   let connection;
   try {
-    const { doc_date, warehouse_id, counter_account_id, notes, items } = req.body;
+    const { doc_date, warehouse_id, counter_account_id, notes, items, currency_code } = req.body;
 
     connection = await odbc.connect(connectionString);
 
     await connection.query(`
-      UPDATE InventoryAdjustments SET doc_date = ?, warehouse_id = ?, counter_account_id = ?, notes = ?, updated_at = CURRENT TIMESTAMP
+      UPDATE InventoryAdjustments SET doc_date = ?, warehouse_id = ?, counter_account_id = ?, notes = ?, currency_code = ?, updated_at = CURRENT TIMESTAMP
       WHERE id = ? AND status = 'Draft'
-    `, [doc_date, warehouse_id, counter_account_id, notes || '', req.params.id]);
+    `, [doc_date, warehouse_id, counter_account_id, notes || '', currency_code || null, req.params.id]);
 
     // Delete and re-insert details
     await connection.query('DELETE FROM InventoryAdjustmentDetails WHERE adjustment_id = ?', [req.params.id]);
@@ -5310,14 +5742,14 @@ app.get('/api/ap-adjustments/:id', async (req, res) => {
 app.post('/api/ap-adjustments', async (req, res) => {
   let connection;
   try {
-    const { doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+    const { doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations, currency_code } = req.body;
 
     connection = await odbc.connect(connectionString);
 
     await connection.query(`
-      INSERT INTO APAdjustments (doc_number, doc_date, type, transcode_id, partner_id, counter_account_id, total_amount, description, status, allocate_to_invoice)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
-    `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N']);
+      INSERT INTO APAdjustments (doc_number, doc_date, type, transcode_id, partner_id, counter_account_id, total_amount, description, status, allocate_to_invoice, currency_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?, ?)
+    `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', currency_code || null]);
 
     const adjustmentIdResult = await connection.query('SELECT @@IDENTITY as id');
     const adjustmentId = Number(adjustmentIdResult[0].id);
@@ -5343,12 +5775,12 @@ app.post('/api/ap-adjustments', async (req, res) => {
 // Update AP adjustment
 app.put('/api/ap-adjustments/:id', async (req, res) => {
   try {
-    const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+    const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations, currency_code } = req.body;
 
     await executeQuery(`
-      UPDATE APAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, total_amount = ?, description = ?, allocate_to_invoice = ?, updated_at = CURRENT TIMESTAMP
+      UPDATE APAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, total_amount = ?, description = ?, allocate_to_invoice = ?, currency_code = ?, updated_at = CURRENT TIMESTAMP
       WHERE id = ? AND status = 'Draft'
-    `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', req.params.id]);
+    `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', currency_code || null, req.params.id]);
 
     // Update allocations
     await executeQuery('DELETE FROM APAdjustmentAllocations WHERE adjustment_id = ?', [req.params.id]);
@@ -5616,14 +6048,14 @@ app.get('/api/ar-adjustments/:id', async (req, res) => {
 app.post('/api/ar-adjustments', async (req, res) => {
   let connection;
   try {
-    const { doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+    const { doc_number, doc_date, adjustment_type, transcode_id, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations, currency_code } = req.body;
 
     connection = await odbc.connect(connectionString);
 
     await connection.query(`
-      INSERT INTO ARAdjustments (doc_number, doc_date, type, transcode_id, partner_id, counter_account_id, total_amount, description, status, allocate_to_invoice)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
-    `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N']);
+      INSERT INTO ARAdjustments (doc_number, doc_date, type, transcode_id, partner_id, counter_account_id, total_amount, description, status, allocate_to_invoice, currency_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?, ?)
+    `, [doc_number, doc_date, adjustment_type, transcode_id || null, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', currency_code || null]);
 
     const adjustmentIdResult = await connection.query('SELECT @@IDENTITY as id');
     const adjustmentId = Number(adjustmentIdResult[0].id);
@@ -5649,12 +6081,12 @@ app.post('/api/ar-adjustments', async (req, res) => {
 // Update AR adjustment
 app.put('/api/ar-adjustments/:id', async (req, res) => {
   try {
-    const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations } = req.body;
+    const { doc_date, partner_id, counter_account_id, amount, notes, allocate_to_invoice, allocations, currency_code } = req.body;
 
     await executeQuery(`
-      UPDATE ARAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, total_amount = ?, description = ?, allocate_to_invoice = ?, updated_at = CURRENT TIMESTAMP
+      UPDATE ARAdjustments SET doc_date = ?, partner_id = ?, counter_account_id = ?, total_amount = ?, description = ?, allocate_to_invoice = ?, currency_code = ?, updated_at = CURRENT TIMESTAMP
       WHERE id = ? AND status = 'Draft'
-    `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', req.params.id]);
+    `, [doc_date, partner_id, counter_account_id, amount, notes || '', allocate_to_invoice || 'N', currency_code || null, req.params.id]);
 
     // Update allocations
     await executeQuery('DELETE FROM ARAdjustmentAllocations WHERE adjustment_id = ?', [req.params.id]);
@@ -5889,13 +6321,13 @@ app.post('/api/receivings', async (req, res) => {
     connection = await odbc.connect(connectionString);
     await connection.beginTransaction();
 
-    const { doc_number, doc_date, po_id, partner_id, location_id, transcode_id, remarks, items, status } = req.body;
+    const { doc_number, doc_date, po_id, partner_id, location_id, transcode_id, remarks, items, status, currency_code } = req.body;
 
     // Insert Header
     await connection.query(`
-      INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, location_id, transcode_id, remarks, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [doc_number, doc_date, po_id || null, partner_id || null, location_id || null, transcode_id || null, remarks || '', status || 'Draft']);
+      INSERT INTO Receivings (doc_number, doc_date, po_id, partner_id, location_id, transcode_id, remarks, status, currency_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [doc_number, doc_date, po_id || null, partner_id || null, location_id || null, transcode_id || null, remarks || '', status || 'Draft', currency_code || null]);
 
     const idRes = await connection.query('SELECT @@IDENTITY as id');
     const receivingId = Number(idRes[0].id);

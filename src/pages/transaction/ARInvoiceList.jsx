@@ -30,8 +30,10 @@ function ARInvoiceList() {
         items: [],
         tax_type: 'Exclude',
         sales_person_id: '',
-        payment_term_id: ''
+        payment_term_id: '',
+        currency_code: ''
     });
+    const [currencies, setcurrencies] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -63,13 +65,14 @@ function ARInvoiceList() {
 
     const fetchMasterData = async () => {
         try {
-            const [custRes, shpRes, itemRes, transRes, spRes, ptRes] = await Promise.all([
+            const [custRes, shpRes, itemRes, transRes, spRes, ptRes, rateRes] = await Promise.all([
                 fetch('/api/partners?type=Customer'),
                 fetch('/api/shipments'),
                 fetch('/api/items'),
                 fetch('/api/transcodes'),
                 fetch('/api/salespersons'),
-                fetch('/api/payment-terms')
+                fetch('/api/payment-terms'),
+                fetch('/api/currencies')
             ]);
             const custData = await custRes.json();
             const shpData = await shpRes.json();
@@ -77,6 +80,7 @@ function ARInvoiceList() {
             const transData = await transRes.json();
             const spData = await spRes.json();
             const ptData = await ptRes.json();
+            const rateData = await rateRes.json();
 
             if (custData.success) setCustomers(custData.data);
             if (shpData.success) {
@@ -93,6 +97,7 @@ function ARInvoiceList() {
             }
             if (spData.success) setSalesPersons(spData.data);
             if (ptData.success) setPaymentTerms(ptData.data);
+            if (rateData.success) setcurrencies(rateData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -216,12 +221,14 @@ function ARInvoiceList() {
                         description: d.description,
                         quantity: parseFloat(d.quantity),
                         unit_price: parseFloat(d.unit_price),
-                        amount: parseFloat(d.amount),
-                        shipment_id: d.shipment_id
+                        amount: parseFloat(d.amount) || 0,
+                        shipment_id: d.shipment_id || ''
                     })),
-                    tax_type: inv.tax_type || 'Exclude'
+                    tax_type: inv.tax_type || 'Exclude',
+                    sales_person_id: inv.sales_person_id || '',
+                    payment_term_id: inv.payment_term_id || '',
+                    currency_code: inv.currency_code || ''
                 });
-
                 setSourceType('manual');
                 setEditingItem(id);
                 setShowForm(true);
@@ -319,7 +326,8 @@ function ARInvoiceList() {
             items: [],
             tax_type: 'Exclude',
             sales_person_id: '',
-            payment_term_id: ''
+            payment_term_id: '',
+            currency_code: ''
         });
     };
 
@@ -327,12 +335,19 @@ function ARInvoiceList() {
         return new Date(date).toLocaleDateString('id-ID');
     };
 
-    const formatMoney = (amount) => {
-        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
+    
+
+    const formatCurrency = (value) => {
+        const code = formData.currency_code || 'IDR';
+        try {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code }).format(value || 0);
+        } catch {
+            return `${code} ${new Intl.NumberFormat('id-ID').format(value || 0)}`;
+        }
     };
 
     const calculateSubtotal = () => {
-        return formData.items.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
+        return formData.items.reduce((sum, item) => sum + (parseFloat(item.quantity) * parseFloat(item.unit_price) || 0), 0);
     };
 
     const calculatePPN = () => {
@@ -450,6 +465,21 @@ function ARInvoiceList() {
                                         onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
                                         disabled={formData.status !== 'Draft'}
                                     />
+                                </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
 
@@ -768,3 +798,5 @@ function ARInvoiceList() {
 }
 
 export default ARInvoiceList;
+
+

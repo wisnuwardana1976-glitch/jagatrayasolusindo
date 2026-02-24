@@ -25,6 +25,9 @@ import LocationTransferList from './pages/transaction/LocationTransferList';
 import AccountingPeriodList from './pages/settings/AccountingPeriodList';
 import MenuSettings from './pages/settings/MenuSettings';
 import PaymentTermList from './pages/master/PaymentTermList';
+import CurrencyList from './pages/master/CurrencyList';
+import ExchangeRateTypeList from './pages/master/ExchangeRateTypeList';
+import ExchangeRateList from './pages/master/ExchangeRateList';
 import YearSetupList from './pages/master/YearSetupList';
 import POOutstandingReport from './pages/report/POOutstandingReport';
 import SOOutstandingReport from './pages/report/SOOutstandingReport';
@@ -149,6 +152,12 @@ function AppContent() {
                 return <YearSetupList />;
             case 'payment-term':
                 return <PaymentTermList />;
+            case 'currency':
+                return <CurrencyList />;
+            case 'exchange-rate-type':
+                return <ExchangeRateTypeList />;
+            case 'exchange-rate':
+                return <ExchangeRateList />;
             case 'report/sales-summary':
                 return <SalesReport />;
             case 'report/purchase-summary':

@@ -24,11 +24,12 @@ function APInvoiceList() {
         partner_id: '',
         receiving_id: '',
         status: 'Draft',
-        status: 'Draft',
         notes: '',
         items: [],
-        tax_type: 'Exclude'
+        tax_type: 'Exclude',
+        currency_code: ''
     });
+    const [currencies, setcurrencies] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -60,16 +61,18 @@ function APInvoiceList() {
 
     const fetchMasterData = async () => {
         try {
-            const [supRes, recRes, itemRes, transRes] = await Promise.all([
+            const [supRes, recRes, itemRes, transRes, rateRes] = await Promise.all([
                 fetch('/api/partners?type=Supplier'),
                 fetch('/api/receivings'),
                 fetch('/api/items'),
-                fetch('/api/transcodes')
+                fetch('/api/transcodes'),
+                fetch('/api/currencies')
             ]);
             const supData = await supRes.json();
             const recData = await recRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
+            const rateData = await rateRes.json();
 
             if (supData.success) setSuppliers(supData.data);
             if (recData.success) {
@@ -84,6 +87,7 @@ function APInvoiceList() {
                 // Filter for AP Invoice transcode (nomortranscode === 7)
                 setTranscodes(transData.data.filter(t => t.active === 'Y' && t.nomortranscode === 7));
             }
+            if (rateData.success) setcurrencies(rateData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -151,7 +155,6 @@ function APInvoiceList() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const MyDate = new Date();
             const url = editingItem ? `/api/ap-invoices/${editingItem}` : '/api/ap-invoices';
             const method = editingItem ? 'PUT' : 'POST';
 
@@ -204,11 +207,11 @@ function APInvoiceList() {
                         description: d.description,
                         quantity: parseFloat(d.quantity),
                         unit_price: parseFloat(d.unit_price),
-                        amount: parseFloat(d.amount),
-                        amount: parseFloat(d.amount),
-                        receiving_id: d.receiving_id
+                        amount: parseFloat(d.amount) || 0,
+                        receiving_id: d.receiving_id || ''
                     })),
-                    tax_type: inv.tax_type || 'Exclude'
+                    tax_type: inv.tax_type || 'Exclude',
+                    currency_code: inv.currency_code || ''
                 });
 
                 setSourceType(inv.receiving_id ? 'receiving' : 'manual');
@@ -307,7 +310,8 @@ function APInvoiceList() {
             status: 'Draft',
             notes: '',
             items: [],
-            tax_type: 'Exclude'
+            tax_type: 'Exclude',
+            currency_code: ''
         });
     };
 
@@ -315,12 +319,19 @@ function APInvoiceList() {
         return new Date(date).toLocaleDateString('id-ID');
     };
 
-    const formatMoney = (amount) => {
-        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
+    
+
+    const formatCurrency = (value) => {
+        const code = formData.currency_code || 'IDR';
+        try {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code }).format(value || 0);
+        } catch {
+            return `${code} ${new Intl.NumberFormat('id-ID').format(value || 0)}`;
+        }
     };
 
     const calculateSubtotal = () => {
-        return formData.items.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
+        return formData.items.reduce((sum, item) => sum + (parseFloat(item.quantity) * parseFloat(item.unit_price) || 0), 0);
     };
 
     const calculatePPN = () => {
@@ -435,9 +446,24 @@ function APInvoiceList() {
                                     <input
                                         type="date"
                                         value={formData.due_date}
-                                        onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
+                                        onChange={e => setFormData({ ...formData, due_date: e.target.value })}
                                         disabled={formData.status !== 'Draft'}
                                     />
+                                </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status !== 'Draft'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
 
@@ -730,3 +756,5 @@ function APInvoiceList() {
 }
 
 export default APInvoiceList;
+
+

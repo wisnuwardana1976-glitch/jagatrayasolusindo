@@ -6,15 +6,47 @@ const SystemGeneratedJournalList = () => {
     const [loading, setLoading] = useState(true);
     const [selectedJournal, setSelectedJournal] = useState(null);
     const [showModal, setShowModal] = useState(false);
+    const [periods, setPeriods] = useState([]);
+    const [selectedPeriod, setSelectedPeriod] = useState('');
+
+    useEffect(() => {
+        fetchPeriods();
+    }, []);
 
     useEffect(() => {
         fetchJournals();
-    }, []);
+    }, [selectedPeriod]);
+
+    const fetchPeriods = async () => {
+        try {
+            const response = await fetch('/api/accounting-periods');
+            const data = await response.json();
+            if (data.success) {
+                setPeriods(data.data);
+                if (data.data.length > 0) {
+                    // Default to current period if found, or first one
+                    const now = new Date();
+                    const current = data.data.find(p => {
+                        const start = new Date(p.start_date);
+                        const end = new Date(p.end_date);
+                        return now >= start && now <= end;
+                    });
+                    setSelectedPeriod(current ? current.id : data.data[0].id);
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching periods:', error);
+        }
+    };
 
     const fetchJournals = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/journals?source_type=SYSTEM');
+            let url = '/api/journals?source_type=SYSTEM';
+            if (selectedPeriod) {
+                url += `&period_id=${selectedPeriod}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             if (data.success) {
                 setJournals(data.data);
@@ -45,8 +77,22 @@ const SystemGeneratedJournalList = () => {
 
     return (
         <div className="container-fluid">
-            <div className="page-header">
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h1 className="page-title">System Generated Journals</h1>
+                <div className="filter-group" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <label style={{ margin: 0 }}>Periode:</label>
+                    <select
+                        className="form-control"
+                        style={{ width: '200px' }}
+                        value={selectedPeriod}
+                        onChange={(e) => setSelectedPeriod(e.target.value)}
+                    >
+                        <option value="">Semua Periode</option>
+                        {periods.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                    </select>
+                </div>
             </div>
 
             <div className="card">

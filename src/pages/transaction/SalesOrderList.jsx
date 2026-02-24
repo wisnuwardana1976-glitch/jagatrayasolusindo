@@ -19,13 +19,13 @@ function SalesOrderList() {
         status: 'Draft',
         details: [],
         transcode_id: '',
-        details: [],
-        transcode_id: '',
         tax_type: 'Exclude', // 'Exclude' | 'Include' | 'No Tax'
-        payment_term_id: ''
+        payment_term_id: '',
+        currency_code: ''
     });
     const [transcodes, setTranscodes] = useState([]);
     const [paymentTerms, setPaymentTerms] = useState([]);
+    const [currencies, setcurrencies] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -57,18 +57,20 @@ function SalesOrderList() {
 
     const fetchMasterData = async () => {
         try {
-            const [custRes, spRes, itemRes, transRes, topRes] = await Promise.all([
+            const [custRes, spRes, itemRes, transRes, topRes, rateRes] = await Promise.all([
                 fetch('/api/partners?type=Customer'),
                 fetch('/api/salespersons'),
                 fetch('/api/items'),
                 fetch('/api/transcodes'),
-                fetch('/api/payment-terms')
+                fetch('/api/payment-terms'),
+                fetch('/api/currencies')
             ]);
             const custData = await custRes.json();
             const spData = await spRes.json();
             const itemData = await itemRes.json();
             const transData = await transRes.json();
             const topData = await topRes.json();
+            const rateData = await rateRes.json();
 
             if (custData.success) setCustomers(custData.data);
             if (spData.success) setSalesPersons(spData.data);
@@ -79,6 +81,7 @@ function SalesOrderList() {
                 setTranscodes(soTranscodes);
             }
             if (topData.success) setPaymentTerms(topData.data.filter(t => t.active === 'Y'));
+            if (rateData.success) setcurrencies(rateData.data);
         } catch (error) {
             console.error('Error:', error);
         }
@@ -156,9 +159,9 @@ function SalesOrderList() {
                         unit_price: parseFloat(d.unit_price)
                     })),
                     transcode_id: so.transcode_id || '',
-                    transcode_id: so.transcode_id || '',
                     tax_type: so.tax_type || (so.ppn_included !== undefined ? (so.ppn_included ? 'Exclude' : 'No Tax') : 'Exclude'),
-                    payment_term_id: so.payment_term_id || ''
+                    payment_term_id: so.payment_term_id || '',
+                    currency_code: so.currency_code || ''
                 });
                 setEditingItem(id);
                 setShowForm(true);
@@ -262,15 +265,21 @@ function SalesOrderList() {
             status: 'Draft',
             details: [],
             transcode_id: '',
-            details: [],
-            transcode_id: '',
             tax_type: 'Exclude',
-            payment_term_id: ''
+            payment_term_id: '',
+            currency_code: ''
         });
     };
 
+    
+
     const formatCurrency = (value) => {
-        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(value || 0);
+        const code = formData.currency_code || 'IDR';
+        try {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code }).format(value || 0);
+        } catch {
+            return `${code} ${new Intl.NumberFormat('id-ID').format(value || 0)}`;
+        }
     };
 
     const formatDate = (date) => {
@@ -384,6 +393,21 @@ function SalesOrderList() {
                                         disabled={formData.status === 'Approved'}
                                     />
                                 </div>
+                                <div className="form-group">
+                                    <label>Mata Uang / Kurs</label>
+                                    <select
+                                        value={formData.currency_code || ''}
+                                        onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+                                        disabled={formData.status === 'Approved' || formData.status === 'Closed'}
+                                    >
+                                        <option value="">IDR (Default - Tanpa Kurs)</option>
+                                        {currencies.filter(er => er.active === 'Y').map(er => (
+                                            <option key={er.code} value={er.code}>
+                                                {er.code} - {er.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
                             <div className="form-row">
                                 <div className="form-group">
@@ -392,7 +416,6 @@ function SalesOrderList() {
                                         value={formData.partner_id}
                                         onChange={(e) => setFormData({ ...formData, partner_id: e.target.value })}
                                         required
-                                        disabled={formData.status === 'Approved'}
                                     >
                                         <option value="">-- Pilih Customer --</option>
                                         {customers.map(c => (
@@ -648,3 +671,5 @@ function SalesOrderList() {
 }
 
 export default SalesOrderList;
+
+

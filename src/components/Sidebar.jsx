@@ -24,6 +24,9 @@ export const menuItems = [
             { id: 'coa-segment', label: 'COA Segment', icon: 'hash' },
             { id: 'salesperson', label: 'Sales Person', icon: 'user' },
             { id: 'payment-term', label: 'Term of Payment', icon: 'credit-card' },
+            { id: 'currency', label: 'Master Currency', icon: 'dollar-sign' },
+            { id: 'exchange-rate-type', label: 'Exchange Rate Type', icon: 'repeat' },
+            { id: 'exchange-rate', label: 'Exchange Rate', icon: 'trending-up' },
             { id: 'year-setup', label: 'Master Tahun', icon: 'calendar' },
         ],
     },
@@ -296,10 +299,13 @@ import { useState, useEffect } from 'react';
 import { usePeriod } from '../context/PeriodContext';
 import { useAuth } from '../context/AuthContext';
 
+import ChangePasswordModal from './ChangePasswordModal';
+
 function Sidebar({ currentPage, setCurrentPage }) {
     const [activeMenuConfig, setActiveMenuConfig] = useState(null);
     const { selectedPeriod, setSelectedPeriod, periods } = usePeriod();
     const { user, logout, hasPermission } = useAuth();
+    const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
     // Initialize expanded sections state
     const [expandedSections, setExpandedSections] = useState(() => {
@@ -484,7 +490,30 @@ function Sidebar({ currentPage, setCurrentPage }) {
                 </div>
             </div>
 
-            <div className="sidebar-footer" style={{ padding: '1rem', borderTop: '1px solid #48546b' }}>
+            <div className="sidebar-footer" style={{ padding: '1rem', borderTop: '1px solid #48546b', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <button
+                    onClick={() => setIsChangePasswordOpen(true)}
+                    style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        backgroundColor: '#4a5568',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem',
+                        marginBottom: '0.5rem'
+                    }}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    Ganti Password
+                </button>
                 <button
                     onClick={handleLogout}
                     style={{
@@ -509,6 +538,11 @@ function Sidebar({ currentPage, setCurrentPage }) {
                     Logout
                 </button>
             </div>
+
+            <ChangePasswordModal
+                isOpen={isChangePasswordOpen}
+                onClose={() => setIsChangePasswordOpen(false)}
+            />
         </aside>
     );
 }
