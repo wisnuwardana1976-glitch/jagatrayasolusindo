@@ -8067,6 +8067,406 @@ app.post('/api/inventory/history-generate', async (req, res) => {
   }
 });
 
+// ==================== CRM - LEADS ====================
+app.get('/api/crm/leads', authenticateToken, async (req, res) => {
+  try {
+    const { status, search } = req.query;
+    let query = 'SELECT * FROM CrmLeads';
+    const conditions = [];
+    const params = [];
+
+    if (status) { conditions.push('status = ?'); params.push(status); }
+    if (search) { conditions.push("(company_name LIKE ? OR contact_name LIKE ? OR email LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY created_at DESC';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/crm/leads/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM CrmLeads WHERE id = ?', [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, error: 'Lead not found' });
+    res.json({ success: true, data: result[0] });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/crm/leads', authenticateToken, async (req, res) => {
+  try {
+    const { company_name, contact_name, phone, email, address, city, source, status, assigned_to, notes } = req.body;
+    // Auto-generate lead_no
+    const countResult = await executeQuery("SELECT COUNT(*) as cnt FROM CrmLeads");
+    const nextNum = (countResult[0].cnt || 0) + 1;
+    const lead_no = 'LD-' + new Date().getFullYear() + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(nextNum).padStart(4, '0');
+
+    await executeQuery(
+      'INSERT INTO CrmLeads (lead_no, company_name, contact_name, phone, email, address, city, source, status, assigned_to, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [lead_no, company_name, contact_name || '', phone || '', email || '', address || '', city || '', source || '', status || 'New', assigned_to || '', notes || '']
+    );
+    res.json({ success: true, message: 'Lead berhasil ditambahkan', lead_no });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/crm/leads/:id', authenticateToken, async (req, res) => {
+  try {
+    const { company_name, contact_name, phone, email, address, city, source, status, assigned_to, notes } = req.body;
+    await executeQuery(
+      'UPDATE CrmLeads SET company_name = ?, contact_name = ?, phone = ?, email = ?, address = ?, city = ?, source = ?, status = ?, assigned_to = ?, notes = ?, updated_at = CURRENT TIMESTAMP WHERE id = ?',
+      [company_name, contact_name, phone, email, address, city, source, status, assigned_to, notes, req.params.id]
+    );
+    res.json({ success: true, message: 'Lead berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/crm/leads/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CrmActivities WHERE lead_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM CrmContacts WHERE lead_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM CrmLeads WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Lead berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// Convert Lead to Opportunity
+app.post('/api/crm/leads/:id/convert', authenticateToken, async (req, res) => {
+  try {
+    const lead = await executeQuery('SELECT * FROM CrmLeads WHERE id = ?', [req.params.id]);
+    if (lead.length === 0) return res.status(404).json({ success: false, error: 'Lead not found' });
+
+    const l = lead[0];
+    const countResult = await executeQuery("SELECT COUNT(*) as cnt FROM CrmOpportunities");
+    const nextNum = (countResult[0].cnt || 0) + 1;
+    const opp_no = 'OPP-' + new Date().getFullYear() + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(nextNum).padStart(4, '0');
+
+    await executeQuery(
+      'INSERT INTO CrmOpportunities (opp_no, lead_id, title, assigned_to, stage) VALUES (?, ?, ?, ?, ?)',
+      [opp_no, req.params.id, req.body.title || l.company_name + ' - Opportunity', l.assigned_to || '', 'Prospecting']
+    );
+
+    await executeQuery("UPDATE CrmLeads SET status = 'Qualified' WHERE id = ?", [req.params.id]);
+
+    res.json({ success: true, message: 'Lead berhasil dikonversi ke Opportunity', opp_no });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== CRM - CONTACTS ====================
+app.get('/api/crm/contacts', authenticateToken, async (req, res) => {
+  try {
+    const { lead_id, customer_id, search } = req.query;
+    let query = 'SELECT * FROM CrmContacts';
+    const conditions = [];
+    const params = [];
+
+    if (lead_id) { conditions.push('lead_id = ?'); params.push(lead_id); }
+    if (customer_id) { conditions.push('customer_id = ?'); params.push(customer_id); }
+    if (search) { conditions.push("(contact_name LIKE ? OR email LIKE ? OR phone LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY contact_name';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/crm/contacts/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM CrmContacts WHERE id = ?', [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, error: 'Contact not found' });
+    res.json({ success: true, data: result[0] });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/crm/contacts', authenticateToken, async (req, res) => {
+  try {
+    const { contact_name, title, phone, mobile, email, department, lead_id, customer_id, is_primary, notes } = req.body;
+    await executeQuery(
+      'INSERT INTO CrmContacts (contact_name, title, phone, mobile, email, department, lead_id, customer_id, is_primary, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [contact_name, title || '', phone || '', mobile || '', email || '', department || '', lead_id || null, customer_id || null, is_primary || 'N', notes || '']
+    );
+    res.json({ success: true, message: 'Contact berhasil ditambahkan' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/crm/contacts/:id', authenticateToken, async (req, res) => {
+  try {
+    const { contact_name, title, phone, mobile, email, department, lead_id, customer_id, is_primary, notes, active } = req.body;
+    await executeQuery(
+      'UPDATE CrmContacts SET contact_name = ?, title = ?, phone = ?, mobile = ?, email = ?, department = ?, lead_id = ?, customer_id = ?, is_primary = ?, notes = ?, active = ? WHERE id = ?',
+      [contact_name, title, phone, mobile, email, department, lead_id || null, customer_id || null, is_primary, notes, active || 'Y', req.params.id]
+    );
+    res.json({ success: true, message: 'Contact berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/crm/contacts/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CrmContacts WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Contact berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== CRM - OPPORTUNITIES ====================
+app.get('/api/crm/opportunities', authenticateToken, async (req, res) => {
+  try {
+    const { stage, search } = req.query;
+    let query = `SELECT o.*, l.company_name as lead_name
+                 FROM CrmOpportunities o
+                 LEFT JOIN CrmLeads l ON o.lead_id = l.id`;
+    const conditions = [];
+    const params = [];
+
+    if (stage) { conditions.push('o.stage = ?'); params.push(stage); }
+    if (search) { conditions.push("(o.title LIKE ? OR o.opp_no LIKE ?)"); params.push(`%${search}%`, `%${search}%`); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY o.created_at DESC';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/crm/opportunities/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await executeQuery(
+      `SELECT o.*, l.company_name as lead_name
+       FROM CrmOpportunities o LEFT JOIN CrmLeads l ON o.lead_id = l.id
+       WHERE o.id = ?`, [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, error: 'Opportunity not found' });
+    res.json({ success: true, data: result[0] });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/crm/opportunities', authenticateToken, async (req, res) => {
+  try {
+    const { lead_id, customer_id, title, estimated_value, currency_code, probability, stage, expected_close_date, assigned_to, notes } = req.body;
+    const countResult = await executeQuery("SELECT COUNT(*) as cnt FROM CrmOpportunities");
+    const nextNum = (countResult[0].cnt || 0) + 1;
+    const opp_no = 'OPP-' + new Date().getFullYear() + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(nextNum).padStart(4, '0');
+
+    await executeQuery(
+      'INSERT INTO CrmOpportunities (opp_no, lead_id, customer_id, title, estimated_value, currency_code, probability, stage, expected_close_date, assigned_to, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [opp_no, lead_id || null, customer_id || null, title, estimated_value || 0, currency_code || 'IDR', probability || 0, stage || 'Prospecting', expected_close_date || null, assigned_to || '', notes || '']
+    );
+    res.json({ success: true, message: 'Opportunity berhasil ditambahkan', opp_no });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/crm/opportunities/:id', authenticateToken, async (req, res) => {
+  try {
+    const { lead_id, customer_id, title, estimated_value, currency_code, probability, stage, expected_close_date, assigned_to, notes } = req.body;
+    await executeQuery(
+      'UPDATE CrmOpportunities SET lead_id = ?, customer_id = ?, title = ?, estimated_value = ?, currency_code = ?, probability = ?, stage = ?, expected_close_date = ?, assigned_to = ?, notes = ?, updated_at = CURRENT TIMESTAMP WHERE id = ?',
+      [lead_id || null, customer_id || null, title, estimated_value, currency_code, probability, stage, expected_close_date || null, assigned_to, notes, req.params.id]
+    );
+    res.json({ success: true, message: 'Opportunity berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/crm/opportunities/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CrmActivities WHERE opportunity_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM CrmOpportunities WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Opportunity berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== CRM - QUOTATIONS ====================
+app.get('/api/crm/quotations', authenticateToken, async (req, res) => {
+  try {
+    const { status, search } = req.query;
+    let query = `SELECT q.*, o.title as opportunity_title
+                 FROM CrmQuotations q
+                 LEFT JOIN CrmOpportunities o ON q.opportunity_id = o.id`;
+    const conditions = [];
+    const params = [];
+
+    if (status) { conditions.push('q.status = ?'); params.push(status); }
+    if (search) { conditions.push("(q.quot_no LIKE ? OR q.customer_name LIKE ?)"); params.push(`%${search}%`, `%${search}%`); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY q.created_at DESC';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/crm/quotations/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await executeQuery(
+      `SELECT q.*, o.title as opportunity_title
+       FROM CrmQuotations q LEFT JOIN CrmOpportunities o ON q.opportunity_id = o.id
+       WHERE q.id = ?`, [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, error: 'Quotation not found' });
+
+    const items = await executeQuery('SELECT * FROM CrmQuotationItems WHERE quotation_id = ? ORDER BY sort_order', [req.params.id]);
+    res.json({ success: true, data: { ...result[0], items } });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/crm/quotations', authenticateToken, async (req, res) => {
+  try {
+    const { opportunity_id, customer_id, customer_name, quotation_date, valid_until, subtotal, discount_pct, discount_amount, tax_pct, tax_amount, total, currency_code, status, notes, items } = req.body;
+    const countResult = await executeQuery("SELECT COUNT(*) as cnt FROM CrmQuotations");
+    const nextNum = (countResult[0].cnt || 0) + 1;
+    const quot_no = 'QUO-' + new Date().getFullYear() + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(nextNum).padStart(4, '0');
+
+    await executeQuery(
+      'INSERT INTO CrmQuotations (quot_no, opportunity_id, customer_id, customer_name, quotation_date, valid_until, subtotal, discount_pct, discount_amount, tax_pct, tax_amount, total, currency_code, status, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [quot_no, opportunity_id || null, customer_id || null, customer_name || '', quotation_date, valid_until || null, subtotal || 0, discount_pct || 0, discount_amount || 0, tax_pct || 0, tax_amount || 0, total || 0, currency_code || 'IDR', status || 'Draft', notes || '', req.user.username || '']
+    );
+
+    // Get new quotation id
+    const newQuot = await executeQuery("SELECT id FROM CrmQuotations WHERE quot_no = ?", [quot_no]);
+    const quotId = newQuot[0].id;
+
+    // Insert items
+    if (items && items.length > 0) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        await executeQuery(
+          'INSERT INTO CrmQuotationItems (quotation_id, item_id, item_code, description, qty, unit, unit_price, discount_pct, total_price, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [quotId, it.item_id || null, it.item_code || '', it.description || '', it.qty || 1, it.unit || '', it.unit_price || 0, it.discount_pct || 0, it.total_price || 0, i + 1]
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'Quotation berhasil ditambahkan', quot_no });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/crm/quotations/:id', authenticateToken, async (req, res) => {
+  try {
+    const { opportunity_id, customer_id, customer_name, quotation_date, valid_until, subtotal, discount_pct, discount_amount, tax_pct, tax_amount, total, currency_code, status, notes, items } = req.body;
+
+    await executeQuery(
+      'UPDATE CrmQuotations SET opportunity_id = ?, customer_id = ?, customer_name = ?, quotation_date = ?, valid_until = ?, subtotal = ?, discount_pct = ?, discount_amount = ?, tax_pct = ?, tax_amount = ?, total = ?, currency_code = ?, status = ?, notes = ?, updated_at = CURRENT TIMESTAMP WHERE id = ?',
+      [opportunity_id || null, customer_id || null, customer_name, quotation_date, valid_until || null, subtotal, discount_pct, discount_amount, tax_pct, tax_amount, total, currency_code, status, notes, req.params.id]
+    );
+
+    // Replace items
+    await executeQuery('DELETE FROM CrmQuotationItems WHERE quotation_id = ?', [req.params.id]);
+    if (items && items.length > 0) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        await executeQuery(
+          'INSERT INTO CrmQuotationItems (quotation_id, item_id, item_code, description, qty, unit, unit_price, discount_pct, total_price, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [req.params.id, it.item_id || null, it.item_code || '', it.description || '', it.qty || 1, it.unit || '', it.unit_price || 0, it.discount_pct || 0, it.total_price || 0, i + 1]
+        );
+      }
+    }
+
+    res.json({ success: true, message: 'Quotation berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/crm/quotations/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CrmQuotationItems WHERE quotation_id = ?', [req.params.id]);
+    await executeQuery('DELETE FROM CrmQuotations WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Quotation berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== CRM - ACTIVITIES ====================
+app.get('/api/crm/activities', authenticateToken, async (req, res) => {
+  try {
+    const { activity_type, status, lead_id, opportunity_id, search } = req.query;
+    let query = `SELECT a.*, l.company_name as lead_name, o.title as opportunity_title
+                 FROM CrmActivities a
+                 LEFT JOIN CrmLeads l ON a.lead_id = l.id
+                 LEFT JOIN CrmOpportunities o ON a.opportunity_id = o.id`;
+    const conditions = [];
+    const params = [];
+
+    if (activity_type) { conditions.push('a.activity_type = ?'); params.push(activity_type); }
+    if (status) { conditions.push('a.status = ?'); params.push(status); }
+    if (lead_id) { conditions.push('a.lead_id = ?'); params.push(lead_id); }
+    if (opportunity_id) { conditions.push('a.opportunity_id = ?'); params.push(opportunity_id); }
+    if (search) { conditions.push("(a.subject LIKE ? OR a.description LIKE ?)"); params.push(`%${search}%`, `%${search}%`); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY a.activity_date DESC';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.get('/api/crm/activities/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await executeQuery(
+      `SELECT a.*, l.company_name as lead_name, o.title as opportunity_title
+       FROM CrmActivities a
+       LEFT JOIN CrmLeads l ON a.lead_id = l.id
+       LEFT JOIN CrmOpportunities o ON a.opportunity_id = o.id
+       WHERE a.id = ?`, [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, error: 'Activity not found' });
+    res.json({ success: true, data: result[0] });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/crm/activities', authenticateToken, async (req, res) => {
+  try {
+    const { activity_type, subject, description, activity_date, due_date, lead_id, opportunity_id, customer_id, assigned_to, status, priority } = req.body;
+    await executeQuery(
+      'INSERT INTO CrmActivities (activity_type, subject, description, activity_date, due_date, lead_id, opportunity_id, customer_id, assigned_to, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [activity_type, subject, description || '', activity_date, due_date || null, lead_id || null, opportunity_id || null, customer_id || null, assigned_to || '', status || 'Planned', priority || 'Normal']
+    );
+    res.json({ success: true, message: 'Activity berhasil ditambahkan' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.put('/api/crm/activities/:id', authenticateToken, async (req, res) => {
+  try {
+    const { activity_type, subject, description, activity_date, due_date, lead_id, opportunity_id, customer_id, assigned_to, status, priority } = req.body;
+    await executeQuery(
+      'UPDATE CrmActivities SET activity_type = ?, subject = ?, description = ?, activity_date = ?, due_date = ?, lead_id = ?, opportunity_id = ?, customer_id = ?, assigned_to = ?, status = ?, priority = ? WHERE id = ?',
+      [activity_type, subject, description, activity_date, due_date || null, lead_id || null, opportunity_id || null, customer_id || null, assigned_to, status, priority, req.params.id]
+    );
+    res.json({ success: true, message: 'Activity berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.delete('/api/crm/activities/:id', authenticateToken, async (req, res) => {
+  try {
+    await executeQuery('DELETE FROM CrmActivities WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Activity berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== CRM - DASHBOARD / REPORT ====================
+app.get('/api/crm/dashboard', authenticateToken, async (req, res) => {
+  try {
+    const leadsByStatus = await executeQuery("SELECT status, COUNT(*) as count FROM CrmLeads GROUP BY status");
+    const oppsByStage = await executeQuery("SELECT stage, COUNT(*) as count, SUM(estimated_value) as total_value FROM CrmOpportunities GROUP BY stage");
+    const totalLeads = await executeQuery("SELECT COUNT(*) as count FROM CrmLeads");
+    const totalOpps = await executeQuery("SELECT COUNT(*) as count FROM CrmOpportunities");
+    const totalQuots = await executeQuery("SELECT COUNT(*) as count FROM CrmQuotations");
+    const pipelineValue = await executeQuery("SELECT SUM(estimated_value) as total FROM CrmOpportunities WHERE stage NOT IN ('Closed Won', 'Closed Lost')");
+    const wonValue = await executeQuery("SELECT SUM(estimated_value) as total FROM CrmOpportunities WHERE stage = 'Closed Won'");
+    const recentActivities = await executeQuery("SELECT TOP 10 a.*, l.company_name as lead_name FROM CrmActivities a LEFT JOIN CrmLeads l ON a.lead_id = l.id ORDER BY a.activity_date DESC");
+    const quotsByStatus = await executeQuery("SELECT status, COUNT(*) as count, SUM(total) as total_value FROM CrmQuotations GROUP BY status");
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalLeads: totalLeads[0].count,
+          totalOpportunities: totalOpps[0].count,
+          totalQuotations: totalQuots[0].count,
+          pipelineValue: pipelineValue[0].total || 0,
+          wonValue: wonValue[0].total || 0,
+        },
+        leadsByStatus,
+        oppsByStage,
+        quotsByStatus,
+        recentActivities
+      }
+    });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`🚀 Server berjalan di http://localhost:${PORT}`);

@@ -54,6 +54,12 @@ import InventoryAdjustmentList from './pages/transaction/InventoryAdjustmentList
 import APAdjustmentList from './pages/transaction/APAdjustmentList';
 import ARAdjustmentList from './pages/transaction/ARAdjustmentList';
 import ItemConversionList from './pages/transaction/ItemConversionList';
+import CrmLeadList from './pages/crm/CrmLeadList';
+import CrmOpportunityList from './pages/crm/CrmOpportunityList';
+import CrmQuotationList from './pages/crm/CrmQuotationList';
+import CrmActivityList from './pages/crm/CrmActivityList';
+import CrmContactList from './pages/crm/CrmContactList';
+import CrmReport from './pages/crm/CrmReport';
 import './index.css';
 
 import { PeriodProvider } from './context/PeriodContext';
@@ -218,6 +224,18 @@ function AppContent() {
                 return <ARAdjustmentList adjustmentType="CREDIT" />;
             case 'item-conversion':
                 return <ItemConversionList />;
+            case 'crm-lead':
+                return <CrmLeadList />;
+            case 'crm-opportunity':
+                return <CrmOpportunityList />;
+            case 'crm-quotation':
+                return <CrmQuotationList />;
+            case 'crm-activity':
+                return <CrmActivityList />;
+            case 'crm-contact':
+                return <CrmContactList />;
+            case 'crm-report':
+                return <CrmReport />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }
