@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import ItemList from './pages/master/ItemList';
+import ItemGroupList from './pages/master/ItemGroupList';
+import ItemCategoryList from './pages/master/ItemCategoryList';
+import ItemBrandList from './pages/master/ItemBrandList';
+import ItemModelList from './pages/master/ItemModelList';
 import PartnerList from './pages/master/PartnerList';
 import SalesPersonList from './pages/master/SalesPersonList';
 import UnitList from './pages/master/UnitList';
@@ -60,6 +64,10 @@ import CrmQuotationList from './pages/crm/CrmQuotationList';
 import CrmActivityList from './pages/crm/CrmActivityList';
 import CrmContactList from './pages/crm/CrmContactList';
 import CrmReport from './pages/crm/CrmReport';
+import FixedAssetCategoryList from './pages/asset/FixedAssetCategoryList';
+import FixedAssetList from './pages/asset/FixedAssetList';
+import FixedAssetDepreciationList from './pages/asset/FixedAssetDepreciationList';
+import FixedAssetReport from './pages/report/FixedAssetReport';
 import './index.css';
 
 import { PeriodProvider } from './context/PeriodContext';
@@ -118,6 +126,14 @@ function AppContent() {
                 return <LocationList />;
             case 'accounting-period':
                 return <AccountingPeriodList />;
+            case 'item-group':
+                return <ItemGroupList />;
+            case 'item-category':
+                return <ItemCategoryList />;
+            case 'item-brand':
+                return <ItemBrandList />;
+            case 'item-model':
+                return <ItemModelList />;
             case 'item':
                 return <ItemList />;
             case 'unit':
@@ -236,6 +252,14 @@ function AppContent() {
                 return <CrmContactList />;
             case 'crm-report':
                 return <CrmReport />;
+            case 'fixed-asset-category':
+                return <FixedAssetCategoryList />;
+            case 'fixed-asset':
+                return <FixedAssetList />;
+            case 'fixed-asset-depreciation':
+                return <FixedAssetDepreciationList />;
+            case 'report/fixed-asset':
+                return <FixedAssetReport />;
             default:
                 return <Dashboard connectionStatus={connectionStatus} onRetryConnection={checkConnection} />;
         }

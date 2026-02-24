@@ -1146,9 +1146,138 @@ app.get('/api/locations', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+// ==================== ITEM GROUPS ====================
+app.get('/api/item-groups', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM ItemGroups ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.post('/api/item-groups', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery('INSERT INTO ItemGroups (code, name, description, active) VALUES (?, ?, ?, ?)', [code, name, description || '', active || 'Y']);
+    res.json({ success: true, message: 'Item Group berhasil ditambahkan' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.put('/api/item-groups/:id', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery('UPDATE ItemGroups SET code = ?, name = ?, description = ?, active = ? WHERE id = ?', [code, name, description, active, req.params.id]);
+    res.json({ success: true, message: 'Item Group berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.delete('/api/item-groups/:id', async (req, res) => {
+  try {
+    const used = await executeQuery('SELECT COUNT(*) as cnt FROM Items WHERE group_id = ?', [req.params.id]);
+    if (used[0].cnt > 0) return res.status(400).json({ success: false, error: 'Group masih digunakan oleh item' });
+    await executeQuery('DELETE FROM ItemGroups WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Item Group berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== ITEM CATEGORIES ====================
+app.get('/api/item-categories', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM ItemCategories ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.post('/api/item-categories', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery('INSERT INTO ItemCategories (code, name, description, active) VALUES (?, ?, ?, ?)', [code, name, description || '', active || 'Y']);
+    res.json({ success: true, message: 'Item Category berhasil ditambahkan' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.put('/api/item-categories/:id', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery('UPDATE ItemCategories SET code = ?, name = ?, description = ?, active = ? WHERE id = ?', [code, name, description, active, req.params.id]);
+    res.json({ success: true, message: 'Item Category berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.delete('/api/item-categories/:id', async (req, res) => {
+  try {
+    const used = await executeQuery('SELECT COUNT(*) as cnt FROM Items WHERE category_id = ?', [req.params.id]);
+    if (used[0].cnt > 0) return res.status(400).json({ success: false, error: 'Category masih digunakan oleh item' });
+    await executeQuery('DELETE FROM ItemCategories WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Item Category berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== ITEM BRANDS ====================
+app.get('/api/item-brands', async (req, res) => {
+  try {
+    const result = await executeQuery('SELECT * FROM ItemBrands ORDER BY code');
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.post('/api/item-brands', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery('INSERT INTO ItemBrands (code, name, description, active) VALUES (?, ?, ?, ?)', [code, name, description || '', active || 'Y']);
+    res.json({ success: true, message: 'Item Brand berhasil ditambahkan' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.put('/api/item-brands/:id', async (req, res) => {
+  try {
+    const { code, name, description, active } = req.body;
+    await executeQuery('UPDATE ItemBrands SET code = ?, name = ?, description = ?, active = ? WHERE id = ?', [code, name, description, active, req.params.id]);
+    res.json({ success: true, message: 'Item Brand berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.delete('/api/item-brands/:id', async (req, res) => {
+  try {
+    const used = await executeQuery('SELECT COUNT(*) as cnt FROM Items WHERE brand_id = ?', [req.params.id]);
+    if (used[0].cnt > 0) return res.status(400).json({ success: false, error: 'Brand masih digunakan oleh item' });
+    await executeQuery('DELETE FROM ItemBrands WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Item Brand berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== ITEM MODELS ====================
+app.get('/api/item-models', async (req, res) => {
+  try {
+    const result = await executeQuery(`SELECT m.*, b.name as brand_name FROM ItemModels m LEFT JOIN ItemBrands b ON m.brand_id = b.id ORDER BY m.code`);
+    res.json({ success: true, data: result });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.post('/api/item-models', async (req, res) => {
+  try {
+    const { code, name, brand_id, description, active } = req.body;
+    await executeQuery('INSERT INTO ItemModels (code, name, brand_id, description, active) VALUES (?, ?, ?, ?, ?)', [code, name, brand_id || null, description || '', active || 'Y']);
+    res.json({ success: true, message: 'Item Model berhasil ditambahkan' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.put('/api/item-models/:id', async (req, res) => {
+  try {
+    const { code, name, brand_id, description, active } = req.body;
+    await executeQuery('UPDATE ItemModels SET code = ?, name = ?, brand_id = ?, description = ?, active = ? WHERE id = ?', [code, name, brand_id || null, description, active, req.params.id]);
+    res.json({ success: true, message: 'Item Model berhasil diupdate' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+app.delete('/api/item-models/:id', async (req, res) => {
+  try {
+    const used = await executeQuery('SELECT COUNT(*) as cnt FROM Items WHERE model_id = ?', [req.params.id]);
+    if (used[0].cnt > 0) return res.status(400).json({ success: false, error: 'Model masih digunakan oleh item' });
+    await executeQuery('DELETE FROM ItemModels WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Item Model berhasil dihapus' });
+  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== ITEMS (MASTER ITEM) ====================
 app.get('/api/items', async (req, res) => {
   try {
-    const result = await executeQuery('SELECT * FROM Items ORDER BY code');
+    const result = await executeQuery(`
+      SELECT i.*, g.name as group_name, c.name as category_name, b.name as brand_name, m.name as model_name
+      FROM Items i
+      LEFT JOIN ItemGroups g ON i.group_id = g.id
+      LEFT JOIN ItemCategories c ON i.category_id = c.id
+      LEFT JOIN ItemBrands b ON i.brand_id = b.id
+      LEFT JOIN ItemModels m ON i.model_id = m.id
+      ORDER BY i.code
+    `);
     res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1166,10 +1295,10 @@ app.get('/api/items/:id', async (req, res) => {
 
 app.post('/api/items', async (req, res) => {
   try {
-    const { code, name, unit, standard_cost, standard_price } = req.body;
+    const { code, name, unit, standard_cost, standard_price, group_id, category_id, brand_id, model_id } = req.body;
     await executeQuery(
-      'INSERT INTO Items (code, name, unit, standard_cost, standard_price) VALUES (?, ?, ?, ?, ?)',
-      [code, name, unit || '', standard_cost || 0, standard_price || 0]
+      'INSERT INTO Items (code, name, unit, standard_cost, standard_price, group_id, category_id, brand_id, model_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [code, name, unit || '', standard_cost || 0, standard_price || 0, group_id || null, category_id || null, brand_id || null, model_id || null]
     );
     const result = await executeQuery('SELECT * FROM Items WHERE code = ?', [code]);
     res.json({ success: true, data: result[0], message: 'Item berhasil ditambahkan' });
@@ -1180,10 +1309,10 @@ app.post('/api/items', async (req, res) => {
 
 app.put('/api/items/:id', async (req, res) => {
   try {
-    const { code, name, unit, standard_cost, standard_price } = req.body;
+    const { code, name, unit, standard_cost, standard_price, group_id, category_id, brand_id, model_id } = req.body;
     await executeQuery(
-      'UPDATE Items SET code = ?, name = ?, unit = ?, standard_cost = ?, standard_price = ? WHERE id = ?',
-      [code, name, unit, standard_cost, standard_price, req.params.id]
+      'UPDATE Items SET code = ?, name = ?, unit = ?, standard_cost = ?, standard_price = ?, group_id = ?, category_id = ?, brand_id = ?, model_id = ? WHERE id = ?',
+      [code, name, unit, standard_cost, standard_price, group_id || null, category_id || null, brand_id || null, model_id || null, req.params.id]
     );
     res.json({ success: true, message: 'Item berhasil diupdate' });
   } catch (error) {
@@ -8465,6 +8594,345 @@ app.get('/api/crm/dashboard', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// ==================== FIXED ASSET - CATEGORIES ====================
+app.get('/api/fixed-asset-categories', async (req, res) => {
+  try {
+    const result = await executeQuery(`
+      SELECT fac.*, 
+        da.code as depreciation_account_code, da.name as depreciation_account_name,
+        aa.code as accumulated_account_code, aa.name as accumulated_account_name,
+        asa.code as asset_account_code, asa.name as asset_account_name
+      FROM FixedAssetCategories fac
+      LEFT JOIN ChartOfAccounts da ON fac.depreciation_account_id = da.id
+      LEFT JOIN ChartOfAccounts aa ON fac.accumulated_account_id = aa.id
+      LEFT JOIN ChartOfAccounts asa ON fac.asset_account_id = asa.id
+      ORDER BY fac.code
+    `);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/fixed-asset-categories', async (req, res) => {
+  try {
+    const { code, name, useful_life_months, depreciation_method, depreciation_account_id, accumulated_account_id, asset_account_id, active } = req.body;
+    await executeQuery(
+      'INSERT INTO FixedAssetCategories (code, name, useful_life_months, depreciation_method, depreciation_account_id, accumulated_account_id, asset_account_id, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [code, name, useful_life_months || 12, depreciation_method || 'StraightLine', depreciation_account_id || null, accumulated_account_id || null, asset_account_id || null, active || 'Y']
+    );
+    res.json({ success: true, message: 'Kategori aset berhasil ditambahkan' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/fixed-asset-categories/:id', async (req, res) => {
+  try {
+    const { code, name, useful_life_months, depreciation_method, depreciation_account_id, accumulated_account_id, asset_account_id, active } = req.body;
+    await executeQuery(
+      'UPDATE FixedAssetCategories SET code = ?, name = ?, useful_life_months = ?, depreciation_method = ?, depreciation_account_id = ?, accumulated_account_id = ?, asset_account_id = ?, active = ? WHERE id = ?',
+      [code, name, useful_life_months, depreciation_method, depreciation_account_id || null, accumulated_account_id || null, asset_account_id || null, active, req.params.id]
+    );
+    res.json({ success: true, message: 'Kategori aset berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/fixed-asset-categories/:id', async (req, res) => {
+  try {
+    // Check if category is used by any asset
+    const used = await executeQuery('SELECT COUNT(*) as cnt FROM FixedAssets WHERE category_id = ?', [req.params.id]);
+    if (used[0].cnt > 0) {
+      return res.status(400).json({ success: false, error: 'Kategori ini masih digunakan oleh aset tetap' });
+    }
+    await executeQuery('DELETE FROM FixedAssetCategories WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Kategori aset berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== FIXED ASSET - ASSETS ====================
+app.get('/api/fixed-assets', async (req, res) => {
+  try {
+    const { category_id, status, search } = req.query;
+    let query = `SELECT fa.*, fac.code as category_code, fac.name as category_name
+                 FROM FixedAssets fa
+                 LEFT JOIN FixedAssetCategories fac ON fa.category_id = fac.id`;
+    const conditions = [];
+    const params = [];
+
+    if (category_id) { conditions.push('fa.category_id = ?'); params.push(parseInt(category_id)); }
+    if (status) { conditions.push('fa.status = ?'); params.push(status); }
+    if (search) { conditions.push("(fa.asset_no LIKE ? OR fa.name LIKE ? OR fa.serial_number LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY fa.created_at DESC';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/fixed-assets/:id', async (req, res) => {
+  try {
+    const result = await executeQuery(
+      `SELECT fa.*, fac.code as category_code, fac.name as category_name
+       FROM FixedAssets fa
+       LEFT JOIN FixedAssetCategories fac ON fa.category_id = fac.id
+       WHERE fa.id = ?`, [req.params.id]);
+    if (result.length === 0) return res.status(404).json({ success: false, error: 'Aset tidak ditemukan' });
+
+    const depreciations = await executeQuery(
+      'SELECT * FROM FixedAssetDepreciations WHERE asset_id = ? ORDER BY period_date DESC', [req.params.id]);
+    res.json({ success: true, data: { ...result[0], depreciations } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/fixed-assets', async (req, res) => {
+  try {
+    const { name, description, category_id, acquisition_date, acquisition_cost, salvage_value, useful_life_months, depreciation_method, location, serial_number, notes } = req.body;
+
+    // Auto-generate asset_no
+    const countResult = await executeQuery("SELECT COUNT(*) as cnt FROM FixedAssets");
+    const nextNum = (countResult[0].cnt || 0) + 1;
+    const asset_no = 'FA-' + new Date().getFullYear() + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(nextNum).padStart(4, '0');
+
+    // If no method/useful_life provided, get from category
+    let finalMethod = depreciation_method;
+    let finalLife = useful_life_months;
+    if (!finalMethod || !finalLife) {
+      const cat = await executeQuery('SELECT * FROM FixedAssetCategories WHERE id = ?', [category_id]);
+      if (cat.length > 0) {
+        if (!finalMethod) finalMethod = cat[0].depreciation_method;
+        if (!finalLife) finalLife = cat[0].useful_life_months;
+      }
+    }
+
+    const bookValue = parseFloat(acquisition_cost || 0) - parseFloat(salvage_value || 0);
+
+    await executeQuery(
+      `INSERT INTO FixedAssets (asset_no, name, description, category_id, acquisition_date, acquisition_cost, salvage_value, useful_life_months, depreciation_method, location, serial_number, status, accumulated_depreciation, book_value, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', 0, ?, ?)`,
+      [asset_no, name, description || '', category_id, acquisition_date, acquisition_cost || 0, salvage_value || 0, finalLife || 12, finalMethod || 'StraightLine', location || '', serial_number || '', parseFloat(acquisition_cost || 0), notes || '']
+    );
+    res.json({ success: true, message: 'Aset tetap berhasil ditambahkan', asset_no });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/fixed-assets/:id', async (req, res) => {
+  try {
+    const { name, description, category_id, acquisition_date, acquisition_cost, salvage_value, useful_life_months, depreciation_method, location, serial_number, notes } = req.body;
+    await executeQuery(
+      `UPDATE FixedAssets SET name = ?, description = ?, category_id = ?, acquisition_date = ?, acquisition_cost = ?, salvage_value = ?, useful_life_months = ?, depreciation_method = ?, location = ?, serial_number = ?, notes = ?, updated_at = CURRENT TIMESTAMP WHERE id = ?`,
+      [name, description, category_id, acquisition_date, acquisition_cost, salvage_value, useful_life_months, depreciation_method, location, serial_number, notes, req.params.id]
+    );
+    // Recalculate book_value
+    const asset = await executeQuery('SELECT acquisition_cost, accumulated_depreciation FROM FixedAssets WHERE id = ?', [req.params.id]);
+    if (asset.length > 0) {
+      const bv = parseFloat(asset[0].acquisition_cost) - parseFloat(asset[0].accumulated_depreciation);
+      await executeQuery('UPDATE FixedAssets SET book_value = ? WHERE id = ?', [bv, req.params.id]);
+    }
+    res.json({ success: true, message: 'Aset tetap berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/fixed-assets/:id', async (req, res) => {
+  try {
+    const depCount = await executeQuery('SELECT COUNT(*) as cnt FROM FixedAssetDepreciations WHERE asset_id = ?', [req.params.id]);
+    if (depCount[0].cnt > 0) {
+      return res.status(400).json({ success: false, error: 'Tidak bisa menghapus aset yang sudah memiliki riwayat penyusutan' });
+    }
+    await executeQuery('DELETE FROM FixedAssets WHERE id = ?', [req.params.id]);
+    res.json({ success: true, message: 'Aset tetap berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Dispose asset
+app.post('/api/fixed-assets/:id/dispose', async (req, res) => {
+  try {
+    const { disposal_date, disposal_value, status } = req.body;
+    await executeQuery(
+      `UPDATE FixedAssets SET status = ?, disposal_date = ?, disposal_value = ?, updated_at = CURRENT TIMESTAMP WHERE id = ?`,
+      [status || 'Disposed', disposal_date, disposal_value || 0, req.params.id]
+    );
+    res.json({ success: true, message: 'Aset berhasil di-dispose' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== FIXED ASSET - DEPRECIATION ====================
+app.get('/api/fixed-asset-depreciations', async (req, res) => {
+  try {
+    const { asset_id, period_year, period_month } = req.query;
+    let query = `SELECT fad.*, fa.asset_no, fa.name as asset_name, fac.name as category_name
+                 FROM FixedAssetDepreciations fad
+                 LEFT JOIN FixedAssets fa ON fad.asset_id = fa.id
+                 LEFT JOIN FixedAssetCategories fac ON fa.category_id = fac.id`;
+    const conditions = [];
+    const params = [];
+
+    if (asset_id) { conditions.push('fad.asset_id = ?'); params.push(parseInt(asset_id)); }
+    if (period_year && period_month) {
+      const startDate = `${period_year}-${String(period_month).padStart(2, '0')}-01`;
+      const lastDay = new Date(parseInt(period_year), parseInt(period_month), 0).getDate();
+      const endDate = `${period_year}-${String(period_month).padStart(2, '0')}-${lastDay}`;
+      conditions.push('fad.period_date BETWEEN ? AND ?');
+      params.push(startDate, endDate);
+    }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY fad.period_date DESC, fa.asset_no';
+
+    const result = await executeQuery(query, params);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Run depreciation for a specific month
+app.post('/api/fixed-assets/run-depreciation', async (req, res) => {
+  try {
+    const { year, month } = req.body;
+    const periodDate = `${year}-${String(month).padStart(2, '0')}-01`;
+
+    // Check if depreciation already run for this period
+    const existing = await executeQuery(
+      "SELECT COUNT(*) as cnt FROM FixedAssetDepreciations WHERE period_date = ?", [periodDate]
+    );
+    if (existing[0].cnt > 0) {
+      return res.status(400).json({ success: false, error: `Penyusutan untuk periode ${month}/${year} sudah pernah dijalankan` });
+    }
+
+    // Get all active assets
+    const assets = await executeQuery(
+      "SELECT * FROM FixedAssets WHERE status = 'Active' AND book_value > 0"
+    );
+
+    if (assets.length === 0) {
+      return res.json({ success: true, message: 'Tidak ada aset aktif yang perlu disusutkan', data: [] });
+    }
+
+    const results = [];
+    for (const asset of assets) {
+      const cost = parseFloat(asset.acquisition_cost);
+      const salvage = parseFloat(asset.salvage_value);
+      const life = parseInt(asset.useful_life_months) || 12;
+      const accum = parseFloat(asset.accumulated_depreciation);
+      const depreciable = cost - salvage;
+
+      let depAmount = 0;
+      if (asset.depreciation_method === 'DecliningBalance') {
+        // Double declining balance
+        const rate = (2 / life);
+        const currentBV = cost - accum;
+        depAmount = Math.round(currentBV * rate * 100) / 100;
+        // Don't depreciate below salvage value
+        if ((accum + depAmount) > depreciable) {
+          depAmount = depreciable - accum;
+        }
+      } else {
+        // Straight line
+        depAmount = Math.round((depreciable / life) * 100) / 100;
+        // Don't depreciate below salvage value
+        if ((accum + depAmount) > depreciable) {
+          depAmount = depreciable - accum;
+        }
+      }
+
+      if (depAmount <= 0) continue;
+
+      const newAccum = Math.round((accum + depAmount) * 100) / 100;
+      const newBV = Math.round((cost - newAccum) * 100) / 100;
+
+      // Insert depreciation record
+      await executeQuery(
+        'INSERT INTO FixedAssetDepreciations (asset_id, period_date, depreciation_amount, accumulated_amount, book_value, status) VALUES (?, ?, ?, ?, ?, ?)',
+        [asset.id, periodDate, depAmount, newAccum, newBV, 'Posted']
+      );
+
+      // Update asset
+      const newStatus = newBV <= salvage ? 'Fully Depreciated' : 'Active';
+      await executeQuery(
+        'UPDATE FixedAssets SET accumulated_depreciation = ?, book_value = ?, status = ?, updated_at = CURRENT TIMESTAMP WHERE id = ?',
+        [newAccum, newBV, newStatus, asset.id]
+      );
+
+      results.push({
+        asset_id: asset.id,
+        asset_no: asset.asset_no,
+        asset_name: asset.name,
+        depreciation_amount: depAmount,
+        accumulated_amount: newAccum,
+        book_value: newBV,
+        status: newStatus
+      });
+    }
+
+    res.json({ success: true, message: `Penyusutan berhasil dijalankan untuk ${results.length} aset`, data: results });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Summary report
+app.get('/api/fixed-assets/report/summary', async (req, res) => {
+  try {
+    const { category_id, status } = req.query;
+    let query = `SELECT fa.*, fac.code as category_code, fac.name as category_name
+                 FROM FixedAssets fa
+                 LEFT JOIN FixedAssetCategories fac ON fa.category_id = fac.id`;
+    const conditions = [];
+    const params = [];
+    if (category_id) { conditions.push('fa.category_id = ?'); params.push(parseInt(category_id)); }
+    if (status) { conditions.push('fa.status = ?'); params.push(status); }
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY fac.code, fa.asset_no';
+
+    const assets = await executeQuery(query, params);
+
+    // Summary by category
+    const categorySummary = {};
+    let totalCost = 0, totalAccum = 0, totalBV = 0;
+    for (const a of assets) {
+      const catName = a.category_name || 'Tanpa Kategori';
+      if (!categorySummary[catName]) {
+        categorySummary[catName] = { category: catName, count: 0, total_cost: 0, total_accumulated: 0, total_book_value: 0 };
+      }
+      categorySummary[catName].count++;
+      categorySummary[catName].total_cost += parseFloat(a.acquisition_cost);
+      categorySummary[catName].total_accumulated += parseFloat(a.accumulated_depreciation);
+      categorySummary[catName].total_book_value += parseFloat(a.book_value);
+      totalCost += parseFloat(a.acquisition_cost);
+      totalAccum += parseFloat(a.accumulated_depreciation);
+      totalBV += parseFloat(a.book_value);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        assets,
+        categorySummary: Object.values(categorySummary),
+        totals: { totalAssets: assets.length, totalCost, totalAccumulated: totalAccum, totalBookValue: totalBV }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Start server

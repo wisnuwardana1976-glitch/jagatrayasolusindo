@@ -6,18 +6,34 @@ function ItemList() {
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editingItem, setEditingItem] = useState(null);
+    const [groups, setGroups] = useState([]);
+    const [categories, setCategories] = useState([]);
+    const [brands, setBrands] = useState([]);
+    const [models, setModels] = useState([]);
     const [formData, setFormData] = useState({
-        code: '',
-        name: '',
-        unit: '',
-        standard_cost: 0,
-        standard_price: 0
+        code: '', name: '', unit: '', standard_cost: 0, standard_price: 0,
+        group_id: '', category_id: '', brand_id: '', model_id: ''
     });
 
     useEffect(() => {
         fetchItems();
         fetchUnits();
+        fetchDropdowns();
     }, []);
+
+    const fetchDropdowns = async () => {
+        try {
+            const [gRes, cRes, bRes, mRes] = await Promise.all([
+                fetch('/api/item-groups'), fetch('/api/item-categories'),
+                fetch('/api/item-brands'), fetch('/api/item-models')
+            ]);
+            const [g, c, b, m] = await Promise.all([gRes.json(), cRes.json(), bRes.json(), mRes.json()]);
+            if (g.success) setGroups(g.data.filter(x => x.active === 'Y'));
+            if (c.success) setCategories(c.data.filter(x => x.active === 'Y'));
+            if (b.success) setBrands(b.data.filter(x => x.active === 'Y'));
+            if (m.success) setModels(m.data.filter(x => x.active === 'Y'));
+        } catch (err) { console.error('Error fetching dropdowns:', err); }
+    };
 
     const fetchItems = async () => {
         setLoading(true);
@@ -75,11 +91,10 @@ function ItemList() {
     const handleEdit = (item) => {
         setEditingItem(item);
         setFormData({
-            code: item.code,
-            name: item.name,
-            unit: item.unit || '',
-            standard_cost: item.standard_cost || 0,
-            standard_price: item.standard_price || 0
+            code: item.code, name: item.name, unit: item.unit || '',
+            standard_cost: item.standard_cost || 0, standard_price: item.standard_price || 0,
+            group_id: item.group_id || '', category_id: item.category_id || '',
+            brand_id: item.brand_id || '', model_id: item.model_id || ''
         });
         setShowForm(true);
     };
@@ -99,7 +114,7 @@ function ItemList() {
     };
 
     const resetForm = () => {
-        setFormData({ code: '', name: '', unit: '', standard_cost: 0, standard_price: 0 });
+        setFormData({ code: '', name: '', unit: '', standard_cost: 0, standard_price: 0, group_id: '', category_id: '', brand_id: '', model_id: '' });
     };
 
     const formatCurrency = (value) => {
@@ -157,6 +172,38 @@ function ItemList() {
                             </div>
                             <div className="form-row">
                                 <div className="form-group">
+                                    <label>Group</label>
+                                    <select value={formData.group_id} onChange={e => setFormData({ ...formData, group_id: e.target.value })}>
+                                        <option value="">-- Tanpa Group --</option>
+                                        {groups.map(g => <option key={g.id} value={g.id}>{g.code} - {g.name}</option>)}
+                                    </select>
+                                </div>
+                                <div className="form-group">
+                                    <label>Category</label>
+                                    <select value={formData.category_id} onChange={e => setFormData({ ...formData, category_id: e.target.value })}>
+                                        <option value="">-- Tanpa Category --</option>
+                                        {categories.map(c => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="form-row">
+                                <div className="form-group">
+                                    <label>Brand</label>
+                                    <select value={formData.brand_id} onChange={e => setFormData({ ...formData, brand_id: e.target.value })}>
+                                        <option value="">-- Tanpa Brand --</option>
+                                        {brands.map(b => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
+                                    </select>
+                                </div>
+                                <div className="form-group">
+                                    <label>Model</label>
+                                    <select value={formData.model_id} onChange={e => setFormData({ ...formData, model_id: e.target.value })}>
+                                        <option value="">-- Tanpa Model --</option>
+                                        {models.map(m => <option key={m.id} value={m.id}>{m.code} - {m.name}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="form-row">
+                                <div className="form-group">
                                     <label>Harga Beli (Cost)</label>
                                     <input
                                         type="number"
@@ -195,6 +242,10 @@ function ItemList() {
                             <tr>
                                 <th>Kode</th>
                                 <th>Nama Item</th>
+                                <th>Group</th>
+                                <th>Category</th>
+                                <th>Brand</th>
+                                <th>Model</th>
                                 <th>Satuan</th>
                                 <th style={{ textAlign: 'right' }}>Harga Beli</th>
                                 <th style={{ textAlign: 'right' }}>Harga Jual</th>
@@ -213,10 +264,14 @@ function ItemList() {
                                     <tr key={item.id}>
                                         <td><strong>{item.code}</strong></td>
                                         <td>{item.name}</td>
+                                        <td>{item.group_name || '-'}</td>
+                                        <td>{item.category_name || '-'}</td>
+                                        <td>{item.brand_name || '-'}</td>
+                                        <td>{item.model_name || '-'}</td>
                                         <td><span className="badge badge-info">{item.unit}</span></td>
                                         <td style={{ textAlign: 'right' }}>{formatCurrency(item.standard_cost)}</td>
                                         <td style={{ textAlign: 'right' }}>{formatCurrency(item.standard_price)}</td>
-                                        <td style={{ textAlign: 'center' }}>
+                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                                             <button className="btn-icon" onClick={() => handleEdit(item)} title="Edit">✏️</button>
                                             <button className="btn-icon" onClick={() => handleDelete(item.id)} title="Hapus">🗑️</button>
                                         </td>

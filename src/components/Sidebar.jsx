@@ -17,6 +17,15 @@ export const menuItems = [
         ],
     },
     {
+        section: 'Aset Tetap',
+        items: [
+            { id: 'fixed-asset-category', label: 'Kategori Aset', icon: 'list' },
+            { id: 'fixed-asset', label: 'Daftar Aset Tetap', icon: 'package' },
+            { id: 'fixed-asset-depreciation', label: 'Penyusutan', icon: 'trending-up' },
+            { id: 'report/fixed-asset', label: 'Laporan Aset', icon: 'file-text' },
+        ],
+    },
+    {
         section: 'Master Data',
         items: [
             { id: 'entity', label: 'Entity', icon: 'building' },
@@ -26,19 +35,37 @@ export const menuItems = [
             { id: 'location', label: 'Location', icon: 'map' },
             { id: 'supplier', label: 'Supplier', icon: 'truck' },
             { id: 'customer', label: 'Customer', icon: 'users' },
-            { id: 'item', label: 'Master Item', icon: 'package' },
-            { id: 'unit', label: 'Satuan', icon: 'ruler' },
+            { id: 'salesperson', label: 'Sales Person', icon: 'user' },
+            {
+                id: 'dist-master',
+                label: 'Distribution',
+                icon: 'package',
+                subItems: [
+                    { id: 'item-group', label: 'Item Group', icon: 'folder' },
+                    { id: 'item-category', label: 'Item Category', icon: 'tag' },
+                    { id: 'item-brand', label: 'Item Brand', icon: 'award' },
+                    { id: 'item-model', label: 'Item Model', icon: 'cpu' },
+                    { id: 'item', label: 'Master Item', icon: 'package' },
+                    { id: 'unit', label: 'Satuan', icon: 'ruler' },
+                ]
+            },
+            {
+                id: 'fin-master',
+                label: 'Financial Master',
+                icon: 'dollar-sign',
+                subItems: [
+                    { id: 'coa', label: 'Chart of Accounts', icon: 'book-open' },
+                    { id: 'account-group', label: 'Group COA', icon: 'list' },
+                    { id: 'coa-segment', label: 'COA Segment', icon: 'hash' },
+                    { id: 'payment-term', label: 'Term of Payment', icon: 'credit-card' },
+                    { id: 'currency', label: 'Master Currency', icon: 'dollar-sign' },
+                    { id: 'exchange-rate-type', label: 'Exchange Rate Type', icon: 'repeat' },
+                    { id: 'exchange-rate', label: 'Exchange Rate', icon: 'trending-up' },
+                    { id: 'year-setup', label: 'Master Tahun', icon: 'calendar' },
+                ]
+            },
             { id: 'transcode', label: 'Tipe Transaksi', icon: 'hash' },
             { id: 'transaction', label: 'Transcode', icon: 'list' },
-            { id: 'coa', label: 'Chart of Accounts', icon: 'book-open' },
-            { id: 'account-group', label: 'Group COA', icon: 'list' },
-            { id: 'coa-segment', label: 'COA Segment', icon: 'hash' },
-            { id: 'salesperson', label: 'Sales Person', icon: 'user' },
-            { id: 'payment-term', label: 'Term of Payment', icon: 'credit-card' },
-            { id: 'currency', label: 'Master Currency', icon: 'dollar-sign' },
-            { id: 'exchange-rate-type', label: 'Exchange Rate Type', icon: 'repeat' },
-            { id: 'exchange-rate', label: 'Exchange Rate', icon: 'trending-up' },
-            { id: 'year-setup', label: 'Master Tahun', icon: 'calendar' },
         ],
     },
     {
@@ -70,6 +97,18 @@ export const menuItems = [
         ],
     },
     {
+        section: 'Adjustment',
+        items: [
+            { id: 'inventory-adjustment-in', label: 'Inventory Adj. In', icon: 'download' },
+            { id: 'inventory-adjustment-out', label: 'Inventory Adj. Out', icon: 'send' },
+            { id: 'item-conversion', label: 'Konversi Item', icon: 'repeat' },
+            { id: 'ap-debit-adjustment', label: 'AP Debit Adj.', icon: 'file-minus' },
+            { id: 'ap-credit-adjustment', label: 'AP Credit Adj.', icon: 'file-plus' },
+            { id: 'ar-debit-adjustment', label: 'AR Debit Adj.', icon: 'file-plus' },
+            { id: 'ar-credit-adjustment', label: 'AR Credit Adj.', icon: 'file-minus' },
+        ],
+    },
+    {
         section: 'Laporan',
         items: [
             { id: 'report/sales-summary', label: 'Laporan Penjualan', icon: 'file-text' },
@@ -98,18 +137,6 @@ export const menuItems = [
             { id: 'bank-out', label: 'Bank Keluar', icon: 'credit-card' },
             { id: 'journal-voucher', label: 'Jurnal Voucher', icon: 'book-open' },
             { id: 'system-generated-journal', label: 'Auto Journal', icon: 'file-text' },
-        ],
-    },
-    {
-        section: 'Adjustment',
-        items: [
-            { id: 'inventory-adjustment-in', label: 'Inventory Adj. In', icon: 'download' },
-            { id: 'inventory-adjustment-out', label: 'Inventory Adj. Out', icon: 'send' },
-            { id: 'item-conversion', label: 'Konversi Item', icon: 'repeat' },
-            { id: 'ap-debit-adjustment', label: 'AP Debit Adj.', icon: 'file-minus' },
-            { id: 'ap-credit-adjustment', label: 'AP Credit Adj.', icon: 'file-plus' },
-            { id: 'ar-debit-adjustment', label: 'AR Debit Adj.', icon: 'file-plus' },
-            { id: 'ar-credit-adjustment', label: 'AR Credit Adj.', icon: 'file-minus' },
         ],
     },
 ];
@@ -264,6 +291,37 @@ const icons = {
             <path d="m7 13 2 2"></path>
         </svg>
     ),
+    folder: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+    ),
+    tag: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+            <line x1="7" y1="7" x2="7.01" y2="7"></line>
+        </svg>
+    ),
+    award: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="8" r="7"></circle>
+            <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline>
+        </svg>
+    ),
+    cpu: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+            <rect x="9" y="9" width="6" height="6"></rect>
+            <line x1="9" y1="1" x2="9" y2="4"></line>
+            <line x1="15" y1="1" x2="15" y2="4"></line>
+            <line x1="9" y1="20" x2="9" y2="23"></line>
+            <line x1="15" y1="20" x2="15" y2="23"></line>
+            <line x1="20" y1="9" x2="23" y2="9"></line>
+            <line x1="20" y1="14" x2="23" y2="14"></line>
+            <line x1="1" y1="9" x2="4" y2="9"></line>
+            <line x1="1" y1="14" x2="4" y2="14"></line>
+        </svg>
+    ),
     'hash': (
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="4" y1="9" x2="20" y2="9"></line>
@@ -333,12 +391,14 @@ function Sidebar({ currentPage, setCurrentPage }) {
         return initial;
     });
 
+    const [expandedSubmenus, setExpandedSubmenus] = useState({});
+
     useEffect(() => {
         loadMenuConfig();
     }, []);
 
     const loadMenuConfig = () => {
-        const saved = localStorage.getItem('sidebar_menu_config_v2');
+        const saved = localStorage.getItem('sidebar_menu_config_v4');
         if (saved) {
             try {
                 setActiveMenuConfig(JSON.parse(saved));
@@ -380,6 +440,13 @@ function Sidebar({ currentPage, setCurrentPage }) {
         setExpandedSections(prev => ({
             ...prev,
             [sectionName]: !prev[sectionName]
+        }));
+    };
+
+    const toggleSubmenu = (submenuId) => {
+        setExpandedSubmenus(prev => ({
+            ...prev,
+            [submenuId]: !prev[submenuId]
         }));
     };
 
@@ -450,13 +517,44 @@ function Sidebar({ currentPage, setCurrentPage }) {
                             </span>
                         </div>
                         {expandedSections[section.section] && section.items.map((item) => (
-                            <div
-                                key={item.id}
-                                className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
-                                onClick={() => setCurrentPage(item.id)}
-                            >
-                                {icons[item.icon]}
-                                <span>{item.label}</span>
+                            <div key={item.id}>
+                                <div
+                                    className={`nav-item ${(!item.subItems && currentPage === item.id) ? 'active' : ''}`}
+                                    onClick={() => {
+                                        if (item.subItems) {
+                                            toggleSubmenu(item.id);
+                                        } else {
+                                            setCurrentPage(item.id);
+                                        }
+                                    }}
+                                    style={item.subItems ? { justifyContent: 'space-between', display: 'flex', alignItems: 'center' } : {}}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                        {icons[item.icon]}
+                                        <span>{item.label}</span>
+                                    </div>
+                                    {item.subItems && (
+                                        <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                                            {expandedSubmenus[item.id] ? '▼' : '▶'}
+                                        </span>
+                                    )}
+                                </div>
+
+                                {item.subItems && expandedSubmenus[item.id] && (
+                                    <div className="submenu" style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: '4px', margin: '0.2rem 0.5rem' }}>
+                                        {item.subItems.map(subItem => (
+                                            <div
+                                                key={subItem.id}
+                                                className={`nav-item ${currentPage === subItem.id ? 'active' : ''}`}
+                                                onClick={() => setCurrentPage(subItem.id)}
+                                                style={{ paddingLeft: '3rem', fontSize: '0.85rem' }}
+                                            >
+                                                {icons[subItem.icon]}
+                                                <span>{subItem.label}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
